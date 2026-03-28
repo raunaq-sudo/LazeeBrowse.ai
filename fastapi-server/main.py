@@ -132,9 +132,13 @@ async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
         # Wait for user response (with 5 minute timeout)
         try:
             user_response = await asyncio.wait_for(future, timeout=300.0)
+            await log_chat(f"User response on request: {user_response}", safe_ws)
             return user_response
         except asyncio.TimeoutError:
             return "User did not respond in time"
+    except Exception as e:
+        await log_chat(f"Error requesting user input: {e}", safe_ws)
+        return f"Error requesting user input: {e}"
     finally:
         # Clean up
         pending_inputs.pop(request_id, None)
@@ -340,12 +344,12 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             return
         
         parsed_response = clean_up_response(response)
-        await log_wrapper(f"Conversational agent response: {parsed_response[:100] if parsed_response else 'None'}...")
+        await log_wrapper(f"Conversational agent response: {parsed_response.response[:100] if parsed_response.response else 'None'}...")
         
         # Add assistant response to history
         chat_manager.update_chat_history({
             "role": "assistant", 
-            "content": parsed_response
+            "content": parsed_response.response
         }, session_id)
         
         # Send initial response
@@ -354,7 +358,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 "type": "message",
                 "role": "assistant",
                 "id": str(uuid.uuid4()),
-                "content": parsed_response,
+                "content": parsed_response.response,
                 "timestamp": datetime.now().isoformat(),
             })
         
@@ -546,12 +550,12 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
                 data = json.loads(raw)
                 msg_type = data.get("type", "message")
-                
+                await log_chat(f"Received message: {data}", safe_ws)
                 if msg_type == "message":
                     content = data.get("content", "").strip()
                     if not content:
                         continue
-                    
+                    print(f"[+] Received message: {content}")
                     # Create task for response generation
                     task = asyncio.create_task(
                         generate_agent_response(session_id, content, safe_ws)
@@ -561,7 +565,7 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     
                 elif msg_type == "form_response":
                     request_id = data.get("request_id")
-                    user_input = data.get("data", {}).get("value", "")
+                    user_input = data.get("content", "")
                     
                     if request_id in pending_inputs:
                         pending_inputs[request_id].set_result(user_input)

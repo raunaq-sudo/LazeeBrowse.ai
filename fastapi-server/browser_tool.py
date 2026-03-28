@@ -392,7 +392,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
                 value = await request_user_input(
                     f"Enter value for field: {selector} : {value}"
                 )
-
+                await log_chat(f"Value: {value}")
                 if value == "null" or value == "undefined" or value.strip() == "":
                     value = element.get("value")
 

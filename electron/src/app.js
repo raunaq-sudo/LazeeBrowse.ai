@@ -5,7 +5,8 @@
 let ws = null;
 let sessionId = null;
 let isThinking = false;
-
+let isFormInputRequired = false;
+let formRequestId = null;
 // Generate or retrieve a persistent session ID
 function getSessionId() {
   let id = localStorage.getItem("agent_session_id");
@@ -70,6 +71,16 @@ function handleServerMessage(data) {
 
     case "message":
       setThinking(false);
+      setFormInputRequired(false, null);
+      // Only render assistant messages here;
+      // user messages are rendered optimistically on send
+      if (data.role === "assistant") {
+        appendMessage("assistant", data.content, data.timestamp);
+      }
+      break;
+    
+    case "form_input":
+      setFormInputRequired(true, data.request_id);
       // Only render assistant messages here;
       // user messages are rendered optimistically on send
       if (data.role === "assistant") {
@@ -180,8 +191,12 @@ function sendMessage() {
 
   // Render user message immediately
   appendMessage("user", content, new Date().toISOString());
-
-  ws.send(JSON.stringify({ type: "message", content }));
+  const messageType = isFormInputRequired ? "form_response" : "message"
+  if (formRequestId !== null) { 
+    ws.send(JSON.stringify({ type: messageType, content, request_id: formRequestId }));
+  }else{
+    ws.send(JSON.stringify({ type: messageType, content }));
+  }
 
   input.value = "";
   input.style.height = "auto";
@@ -227,6 +242,12 @@ function setThinking(thinking) {
   sendBtn.disabled = thinking;
 
   if (thinking) scrollToBottom();
+}
+
+function setFormInputRequired(required, request_id) {
+  isFormInputRequired = required;
+  formRequestId = request_id;
+
 }
 
 // ── UI HELPERS ─────────────────────────────────
