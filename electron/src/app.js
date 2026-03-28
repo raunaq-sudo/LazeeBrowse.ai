@@ -81,6 +81,14 @@ function handleServerMessage(data) {
       setThinking(true);
       break;
 
+    case "log":
+      addLog(data.content);
+      break;
+    
+    case "files":
+      renderFiles(data.content);
+      break;
+    
     case "pong":
       break;
   }
@@ -244,3 +252,180 @@ setInterval(() => {
     ws.send(JSON.stringify({ type: "ping" }));
   }
 }, 30000);
+
+function togglePanel(id) {
+  const panel = document.getElementById(id);
+  panel.classList.toggle("collapsed");
+}
+
+function addLog(message) {
+  const logs = document.getElementById("logsContent");
+  if (!logs) return;
+
+  const line = document.createElement("div");
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+  logs.appendChild(line);
+
+  logs.scrollTop = logs.scrollHeight;
+}
+
+// function renderFiles(data) {
+//   const container = document.getElementById("filesContent");
+//   container.innerHTML = "";
+
+//   if (!data || !data.files) return;
+
+//   // STEP 1: Build tree from flat paths
+//   const tree = {};
+
+//   data.files.forEach(file => {
+//     const parts = file.project_path.split("/"); // ["files", "folder", "a.txt"]
+//     let current = tree;
+
+//     parts.forEach((part, index) => {
+//       if (!current[part]) {
+//         current[part] = {
+//           __children: {},
+//           __isFile: index === parts.length - 1,
+//           __path: file.path,
+//           __project_path: file.project_path
+//         };
+//       }
+//       current = current[part].__children;
+//     });
+//   });
+
+//   // STEP 2: Render tree
+//   function createNode(name, node) {
+//     const wrapper = document.createElement("div");
+
+//     const item = document.createElement("div");
+//     item.textContent = name;
+//     item.style.cursor = "pointer";
+
+//     // Styling
+//     item.style.padding = "2px 4px";
+//     item.style.borderRadius = "4px";
+
+//     if (node.__isFile) {
+//       item.style.color = "#c96a2a"; // accent
+//       item.onclick = async () => {
+//         console.log(node)
+//         const res = await window.electronAPI.openFile(node.__path);
+
+//         if (!res.success) {
+//           console.error("Open failed:", res.error);
+//         }
+//       };
+//     } else {
+//       item.style.fontWeight = "600";
+//     }
+
+//     wrapper.appendChild(item);
+
+//     // Children (folder)
+//     const childrenKeys = Object.keys(node.__children);
+//     if (childrenKeys.length > 0) {
+//       const childWrap = document.createElement("div");
+//       childWrap.style.paddingLeft = "12px";
+//       childWrap.style.display = "none";
+
+//       item.onclick = () => {
+//         childWrap.style.display =
+//           childWrap.style.display === "none" ? "block" : "none";
+//       };
+
+//       childrenKeys.forEach(childName => {
+//         childWrap.appendChild(
+//           createNode(childName, node.__children[childName])
+//         );
+//       });
+
+//       wrapper.appendChild(childWrap);
+//     }
+
+//     return wrapper;
+//   }
+
+//   // STEP 3: Render root
+//   Object.keys(tree).forEach(rootKey => {
+//     container.appendChild(createNode(rootKey, tree[rootKey]));
+//   });
+// }
+
+
+function renderFiles(data) {
+  const container = document.getElementById("filesContent");
+  container.innerHTML = "";
+
+  if (!data || !data.nodes) return;
+
+  const tree = {};
+
+  data.nodes.forEach(node => {
+    const parts = node.project_path.split("/");
+    let current = tree;
+
+    parts.forEach((part, index) => {
+      if (!current[part]) {
+        current[part] = {
+          __children: {},
+          __type: index === parts.length - 1 ? node.type : "folder",
+          __path: node.path
+        };
+      }
+      current = current[part].__children;
+    });
+  });
+
+  function createNode(name, node) {
+    const wrapper = document.createElement("div");
+
+    const item = document.createElement("div");
+    item.style.cursor = "pointer";
+    item.style.padding = "2px 4px";
+    item.style.borderRadius = "4px";
+
+    const isFile = node.__type === "file";
+
+    item.textContent = isFile ? "📄 " + name : "📁 " + name;
+
+    if (isFile) {
+      item.style.color = "#c96a2a";
+
+      item.onclick = async () => {
+        await window.electronAPI.openFile(node.__path);
+      };
+
+    } else {
+      item.style.fontWeight = "600";
+    }
+
+    wrapper.appendChild(item);
+
+    const childrenKeys = Object.keys(node.__children);
+
+    if (childrenKeys.length > 0) {
+      const childWrap = document.createElement("div");
+      childWrap.style.paddingLeft = "12px";
+      childWrap.style.display = "none";
+
+      item.onclick = () => {
+        childWrap.style.display =
+          childWrap.style.display === "none" ? "block" : "none";
+      };
+
+      childrenKeys.forEach(child =>
+        childWrap.appendChild(createNode(child, node.__children[child]))
+      );
+
+      wrapper.appendChild(childWrap);
+    }
+
+    return wrapper;
+  }
+
+  Object.keys(tree).forEach(root =>
+    container.appendChild(createNode(root, tree[root]))
+  );
+}

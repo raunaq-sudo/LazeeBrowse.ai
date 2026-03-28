@@ -467,33 +467,49 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
             return f"{e}"
         
     @tool
-    async def get_all_files() -> dict:
+    async def get_all_files():
         """
-        Get all files inside the 'files' directory recursively.
+        Get all files and folders inside the 'files' directory recursively.
 
         Returns:
-            A dictionary containing a list of all files with their names and paths.
+            A dictionary containing a list of all nodes (files + folders).
         """
 
-        await log_chat("Getting all files (recursive)")
+        await log_chat("Getting full file tree (including empty folders)")
 
         try:
             os.makedirs("files", exist_ok=True)
 
-            all_files = []
+            nodes = []
 
-            for root, _, files in os.walk("files"):
-                for file in files:
+            for root, dirs, files in os.walk("files"):
+                
+                # ✅ Add folders (including empty ones)
+                for d in dirs:
+                    full_path = os.path.abspath(os.path.join(root, d))
+                    project_path = os.path.join(root, d)
 
-                    full_path = os.path.join(root, file)
+                    nodes.append({
+                        "name": d,
+                        "path": full_path,
+                        "project_path": project_path,
+                        "type": "folder"
+                    })
 
-                    all_files.append({
-                        "name": file,
-                        "path": full_path
+                # ✅ Add files
+                for f in files:
+                    full_path = os.path.abspath(os.path.join(root, f))
+                    project_path = os.path.join(root, f)
+
+                    nodes.append({
+                        "name": f,
+                        "path": full_path,
+                        "project_path": project_path,
+                        "type": "file"
                     })
 
             result = {
-                "files": all_files
+                "nodes": nodes
             }
 
             await log_chat(str(result))

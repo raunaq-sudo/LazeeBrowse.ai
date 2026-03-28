@@ -51,3 +51,20 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+
+ipcMain.handle("open-file", async (event, filePath) => {
+  try {
+    const result = await shell.openPath(filePath);
+
+    if (result) {
+      console.error("Failed to open:", result);
+      return { success: false, error: result };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+

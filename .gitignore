@@ -1,3 +1,5 @@
 electron/node_modules/
 fastapi-server/venv/
 fastapi-server/.env
+
+fastapi-server/files

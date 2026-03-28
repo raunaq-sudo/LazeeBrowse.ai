@@ -66,6 +66,17 @@
 <div class="screen hidden" id="chatScreen">
   <div class="chat-layout">
 
+    <!-- LEFT: LOGS PANEL -->
+    <div class="side-panel left collapsed" id="logsPanel">
+      <div class="panel-header">
+        <span>Logs</span>
+        <button onclick="togglePanel('logsPanel')">⮜</button>
+      </div>
+      <div class="panel-content" id="logsContent"></div>
+    </div>
+
+  <!-- CENTER: MAIN CHAT -->
+  <div class="chat-main">
     <!-- HEADER BAR -->
     <div class="chat-header">
       <div class="agent-identity">
@@ -144,7 +155,19 @@
       <p class="input-hint">Press <kbd>Enter</kbd> to send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> for new line</p>
     </div>
 
+
+    </div> <!-- END chat-main -->
+
+  <!-- RIGHT: FILE TREE -->
+  <div class="side-panel right collapsed" id="filesPanel">
+    <div class="panel-header">
+      <button onclick="togglePanel('filesPanel')">⮞</button>
+      <span>Files</span>
+    </div>
+    <div class="panel-content" id="filesContent"></div>
   </div>
+
+
 </div>
 
 <script src="app.js"></script>

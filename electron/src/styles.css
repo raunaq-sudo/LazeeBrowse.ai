@@ -364,3 +364,76 @@ kbd {
   border-radius: 4px; padding: 1px 5px;
   color: var(--text-muted);
 }
+
+/* ── 3 PANEL LAYOUT ───────────────────────── */
+.chat-layout {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+}
+
+/* MAIN CHAT */
+.chat-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+/* SIDE PANELS */
+.side-panel {
+  width: 260px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+
+.side-panel.right {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+
+/* COLLAPSED STATE */
+.side-panel.collapsed {
+  width: 34px;
+}
+
+/* HEADER */
+.panel-header {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.panel-header button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* CONTENT */
+.panel-content {
+  flex: 1;
+  padding: 8px;
+  overflow-y: auto;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-secondary);
+}
+
+/* HIDE CONTENT WHEN COLLAPSED */
+.side-panel.collapsed .panel-content,
+.side-panel.collapsed .panel-header span {
+  display: none;
+}

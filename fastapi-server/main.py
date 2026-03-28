@@ -1,6 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, List
+from typing import Dict, List, Set
 import json
 from datetime import datetime
 import uuid
@@ -15,6 +15,8 @@ from langchain.agents import create_agent
 
 from pydantic import BaseModel, Field
 from typing import Optional
+
+import os
 
 from config import llm
 
@@ -58,10 +60,52 @@ chat_manager = ChatManager()
 # Store pending user input requests
 pending_inputs: Dict[str, asyncio.Future] = {}
 
+# Track active WebSocket connections and their status
+active_connections: Dict[str, WebSocket] = {}
+connection_tasks: Dict[str, Set[asyncio.Task]] = {}
+
+# -------------------------------
+# SAFE WEBSOCKET SENDER
+# -------------------------------
+class SafeWebSocket:
+    def __init__(self, websocket: WebSocket, session_id: str):
+        self.websocket = websocket
+        self.session_id = session_id
+        self._closed = False
+        self._lock = asyncio.Lock()
+    
+    async def send(self, data: dict) -> bool:
+        """Safely send data through WebSocket with connection check"""
+        if self._closed:
+            return False
+        
+        async with self._lock:
+            try:
+                # Check if websocket is still open
+                if hasattr(self.websocket, 'client_state'):
+                    if self.websocket.client_state.name != "CONNECTED":
+                        self._closed = True
+                        return False
+                
+                await self.websocket.send_text(json.dumps(data))
+                return True
+            except (RuntimeError, WebSocketDisconnect, Exception) as e:
+                print(f"WebSocket send error for {self.session_id}: {e}")
+                self._closed = True
+                return False
+    
+    async def close(self):
+        """Mark as closed"""
+        self._closed = True
+    
+    @property
+    def is_closed(self):
+        return self._closed
+
 # -------------------------------
 # HELPER FUNCTIONS
 # -------------------------------
-async def request_user_input(message: str, websocket: WebSocket) -> str:
+async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
     """
     Request input from user and wait for response.
     Returns the user's input as a string.
@@ -74,13 +118,16 @@ async def request_user_input(message: str, websocket: WebSocket) -> str:
     
     try:
         # Send input request to client
-        await websocket.send_text(json.dumps({
+        success = await safe_ws.send({
             "type": "form_input",
             "request_id": request_id,
             "role": "assistant",
             "content": message,
             "timestamp": datetime.now().isoformat(),
-        }))
+        })
+        
+        if not success:
+            return "WebSocket connection closed"
         
         # Wait for user response (with 5 minute timeout)
         try:
@@ -92,50 +139,155 @@ async def request_user_input(message: str, websocket: WebSocket) -> str:
         # Clean up
         pending_inputs.pop(request_id, None)
 
-async def log_chat(message: str, websocket: WebSocket):
+async def log_chat(message: str, safe_ws: SafeWebSocket):
     """Send log message to client"""
-    await websocket.send_text(json.dumps({
+    print("Sending Log.")
+    await safe_ws.send({
         "type": "log",
         "content": message,
         "timestamp": datetime.now().isoformat(),
-    }))
+    })
 
-def clean_up_response(response) -> QueryRouterResponse:
-    """Clean and parse agent response"""
+async def file_tree_data(safe_ws: SafeWebSocket):
+    """
+    Get all files and folders inside the 'files' directory recursively.
+
+    Returns:
+        A dictionary containing a list of all nodes (files + folders).
+    """
+
+    await log_chat("Getting full file tree (including empty folders)", safe_ws)
+
     try:
-        if hasattr(response, 'messages') and response.messages:
-            # Handle agent response
-            last_message = response.messages[-1]
-            if hasattr(last_message, 'content'):
-                content = last_message.content
-                if isinstance(content, dict) and 'response' in content:
-                    return QueryRouterResponse(**content)
-                elif isinstance(content, str):
-                    return QueryRouterResponse(browsing_required=False, response=content)
-        elif isinstance(response, dict):
-            return QueryRouterResponse(**response)
-        elif isinstance(response, str):
-            return QueryRouterResponse(browsing_required=False, response=response)
-        elif hasattr(response, 'response'):
-            return QueryRouterResponse(
-                browsing_required=getattr(response, 'browsing_required', False),
-                response=getattr(response, 'response', str(response))
-            )
+        os.makedirs("files", exist_ok=True)
+
+        nodes = []
+
+        for root, dirs, files in os.walk("files"):
+            
+            # ✅ Add folders (including empty ones)
+            for d in dirs:
+                full_path = os.path.abspath(os.path.join(root, d))
+                project_path = os.path.join(root, d)
+
+                nodes.append({
+                    "name": d,
+                    "path": full_path,
+                    "project_path": project_path,
+                    "type": "folder"
+                })
+
+            # ✅ Add files
+            for f in files:
+                full_path = os.path.abspath(os.path.join(root, f))
+                project_path = os.path.join(root, f)
+
+                nodes.append({
+                    "name": f,
+                    "path": full_path,
+                    "project_path": project_path,
+                    "type": "file"
+                })
+
+        result = {
+            "nodes": nodes
+        }
+
+        await log_chat(str(result), safe_ws)
+
+        if not safe_ws.is_closed:
+            await safe_ws.send({
+                "type": "files",
+                "content": result
+            })
+
     except Exception as e:
-        print(f"Error cleaning response: {e}")
-    
-    # Default fallback
-    return QueryRouterResponse(browsing_required=False, response=str(response))
+        await log_chat(f"Error getting all files: {e}", safe_ws)
+        return {"error": str(e)}
+
+def clean_up_response(response):
+
+        def extract_text(content):
+            # Case 1: plain string
+            if isinstance(content, str):
+                return content
+
+            # Case 2: list of content blocks
+            if isinstance(content, list):
+                for item in reversed(content):
+                    if isinstance(item, dict) and "text" in item:
+                        return item["text"]
+                    if "structured_response" in content and content.get("structured_response") is not None:
+                        return content["structured_response"]
+
+                return str(content)
+
+            # Case 3: dict with text
+            if isinstance(content, dict):
+                if "text" in content:
+                    return content["text"]
+
+                if "structured_response" in content and content.get("structured_response") is not None:
+                    return content["structured_response"]
+
+                return str(content)
+
+            return None
+
+        # -------------------------------
+        # Case 1: LangChain agent structured response
+        # -------------------------------
+        if isinstance(response, dict) and "structured_response" in response:
+            return response["structured_response"]
+
+
+        # -------------------------------
+        # Case 1: LangChain agent response
+        # -------------------------------
+
+        if isinstance(response, dict) and "messages" in response:
+            for msg in reversed(response["messages"]):
+                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+                text = extract_text(content)
+                if text:
+                    return text
+
+        # -------------------------------
+        # Case 2: direct dict response
+        # -------------------------------
+        if isinstance(response, dict):
+            content = response.get("content")
+            text = extract_text(content)
+            if text:
+                return text
+
+        # -------------------------------
+        # Case 3: AIMessage or similar
+        # -------------------------------
+        if hasattr(response, "content"):
+            text = extract_text(response.content)
+            if text:
+                return text
+
+        # -------------------------------
+        # FINAL FALLBACK (SAFE)
+        # -------------------------------
+        return f"No readable response generated. {str(response).replace('`', '')}"
 
 # -------------------------------
 # AGENT RESPONSE GENERATION
 # -------------------------------
-async def generate_agent_response(session_id: str, user_message: str, websocket: WebSocket) -> str:
+async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket):
     """
     Generate agent response with browser automation support.
-    Properly handles user input requests.
+    Now properly handles connection state.
     """
     try:
+        # Check if connection is still active
+        if safe_ws.is_closed:
+            print(f"Connection closed for {session_id}, skipping response generation")
+            return
+        
         # Get chat history
         chat_history = chat_manager.get_chat_history(session_id)
         
@@ -144,28 +296,27 @@ async def generate_agent_response(session_id: str, user_message: str, websocket:
         chat_manager.update_chat_history(user_message_obj, session_id)
         
         # Send thinking indicator
-        await websocket.send_text(json.dumps({
+        await safe_ws.send({
             "type": "agent_thinking",
             "timestamp": datetime.now().isoformat(),
-        }))
+        })
         
         # Load router prompt
         try:
             with open("conversational_agent_system_prompt.md", "r") as f:
                 conversational_agent_prompt = f.read()
         except FileNotFoundError:
-            conversational_agent_prompt = "You are a helpful assistant that can browse the web when needed. When you need information from the user, use the request_user_input tool."
+            conversational_agent_prompt = "You are a helpful assistant that can browse the web when needed."
         
-        # Create wrapper functions that use the websocket
+        # Create wrapper functions that use the safe WebSocket
         async def request_input_wrapper(message: str) -> str:
-            """Wrapper for request_user_input that returns the user's response"""
-            return await request_user_input(message, websocket)
+            return await request_user_input(message, safe_ws)
         
         async def log_wrapper(message: str):
-            """Wrapper for log_chat"""
-            await log_chat(message, websocket)
+            await log_chat(message, safe_ws)
         
-        # Create conversational agent with proper wrappers
+        await file_tree_data(safe_ws)
+        # Create conversational agent
         convo_agent = create_agent(
             model=llm,
             tools=build_tools(
@@ -177,11 +328,16 @@ async def generate_agent_response(session_id: str, user_message: str, websocket:
             system_prompt=conversational_agent_prompt,
             response_format=QueryRouterResponse
         )
-        
-        # Get agent response
-        response = await convo_agent.ainvoke({
-            "messages": chat_history
-        })
+        await file_tree_data(safe_ws)
+        # Get agent response with timeout
+        try:
+            response = await asyncio.wait_for(
+                convo_agent.ainvoke({"messages": chat_history}),
+                timeout=60.0
+            )
+        except asyncio.TimeoutError:
+            await log_wrapper("Agent response timeout")
+            return
         
         parsed_response = clean_up_response(response)
         await log_wrapper(f"Conversational agent response: {parsed_response.response[:100] if parsed_response.response else 'None'}...")
@@ -193,17 +349,18 @@ async def generate_agent_response(session_id: str, user_message: str, websocket:
         }, session_id)
         
         # Send initial response
-        await websocket.send_text(json.dumps({
-            "type": "message",
-            "role": "assistant",
-            "id": str(uuid.uuid4()),
-            "content": parsed_response.response,
-            "timestamp": datetime.now().isoformat(),
-        }))
+        if not safe_ws.is_closed:
+            await safe_ws.send({
+                "type": "message",
+                "role": "assistant",
+                "id": str(uuid.uuid4()),
+                "content": parsed_response.response,
+                "timestamp": datetime.now().isoformat(),
+            })
         
         # Check if browsing is required
         if not parsed_response.browsing_required:
-            return parsed_response.response
+            return
         
         # -------------------------------
         # BROWSING FLOW
@@ -228,8 +385,13 @@ async def generate_agent_response(session_id: str, user_message: str, websocket:
             "messages": chat_manager.get_chat_history(session_id)
         })
         
-        system_prompt = clean_up_response(response_sys_prompt).response
+        system_prompt = clean_up_response(response_sys_prompt)
         await log_wrapper("✅ System prompt generated")
+        
+        # Check connection before browser launch
+        if safe_ws.is_closed:
+            await log_wrapper("Connection closed, aborting browser session")
+            return
         
         # -------------------------------
         # BROWSER EXECUTION
@@ -249,16 +411,12 @@ async def generate_agent_response(session_id: str, user_message: str, websocket:
             context = await browser.new_context(permissions=[])
             page = await context.new_page()
             
-            # Disable JS dialogs
             page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
-            
-            # Block popup tabs
             context.on("page", lambda p: asyncio.create_task(p.close()))
             
             await log_wrapper("📄 Browser ready")
             session = BrowserSession(page)
             
-            # Create tools with the wrapper functions
             tools = build_tools(
                 session=session,
                 request_user_input=request_input_wrapper,
@@ -270,7 +428,7 @@ async def generate_agent_response(session_id: str, user_message: str, websocket:
                 tools=tools,
                 system_prompt=system_prompt,
             )
-            
+            await file_tree_data(safe_ws)
             await log_wrapper("🤖 Agent created. Running browser automation...")
             
             try:
@@ -316,25 +474,29 @@ async def generate_agent_response(session_id: str, user_message: str, websocket:
         }, session_id)
         
         # Send final response
-        await websocket.send_text(json.dumps({
-            "type": "message",
-            "role": "assistant",
-            "id": str(uuid.uuid4()),
-            "content": final_response.response,
-            "timestamp": datetime.now().isoformat(),
-        }))
-        
-        return final_response.response
-        
+        if not safe_ws.is_closed:
+            await safe_ws.send({
+                "type": "message",
+                "role": "assistant",
+                "id": str(uuid.uuid4()),
+                "content": final_response.response,
+                "timestamp": datetime.now().isoformat(),
+            })
+        await file_tree_data(safe_ws)
+    except asyncio.CancelledError:
+        print(f"Task cancelled for session {session_id}")
     except Exception as e:
         error_msg = f"Error generating response: {str(e)}"
-        await log_chat(f"❌ {error_msg}", websocket)
-        await websocket.send_text(json.dumps({
-            "type": "error",
-            "content": error_msg,
-            "timestamp": datetime.now().isoformat(),
-        }))
-        return error_msg
+        print(error_msg)
+        try:
+            if not safe_ws.is_closed:
+                await safe_ws.send({
+                    "type": "error",
+                    "content": error_msg,
+                    "timestamp": datetime.now().isoformat(),
+                })
+        except:
+            pass
 
 # -------------------------------
 # WEB ENDPOINTS
@@ -345,82 +507,119 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "active_sessions": len(chat_manager.chat_histories)}
+    return {
+        "status": "healthy", 
+        "active_sessions": len(active_connections),
+        "pending_inputs": len(pending_inputs)
+    }
 
 @app.websocket("/ws/{session_id}")
 async def agent_session(websocket: WebSocket, session_id: str):
     await websocket.accept()
+
     
     print(f"[+] Session open: {session_id}")
     
-    # Initialize chat history
-    chat_manager.get_chat_history(session_id)
-    
-    await websocket.send_text(json.dumps({
-        "type": "system",
-        "event": "connected",
-        "session_id": session_id,
-        "history_length": len(chat_manager.get_chat_history(session_id)),
-        "timestamp": datetime.now().isoformat(),
-    }))
+    # Store connection
+    active_connections[session_id] = websocket
+    safe_ws = SafeWebSocket(websocket, session_id)
+    connection_tasks[session_id] = set()
     
     try:
-        while True:
-            raw = await websocket.receive_text()
-            data = json.loads(raw)
-            msg_type = data.get("type", "message")
-            
-            if msg_type == "message":
-                content = data.get("content", "").strip()
-                if not content:
-                    continue
+        await file_tree_data(safe_ws)
+        # Initialize chat history
+        chat_manager.get_chat_history(session_id)
+        
+        # Send connection confirmation
+        await safe_ws.send({
+            "type": "system",
+            "event": "connected",
+            "session_id": session_id,
+            "history_length": len(chat_manager.get_chat_history(session_id)),
+            "timestamp": datetime.now().isoformat(),
+        })
+        
+        # Main message loop
+        while not safe_ws.is_closed:
+            try:
+                # Receive with timeout to allow checking for closure
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
+                data = json.loads(raw)
+                msg_type = data.get("type", "message")
                 
-                # Generate agent response in background
-                asyncio.create_task(generate_agent_response(session_id, content, websocket))
-                
-            elif msg_type == "form_response":
-                # Handle user response to input request
-                request_id = data.get("request_id")
-                user_input = data.get("data", {}).get("value", "")
-                
-                # Resolve the pending future if it exists
-                if request_id in pending_inputs:
-                    pending_inputs[request_id].set_result(user_input)
-                    await log_chat(f"📥 Received user input: {user_input[:50]}...", websocket)
-                else:
-                    await log_chat(f"⚠️ No pending request for ID: {request_id}", websocket)
+                if msg_type == "message":
+                    content = data.get("content", "").strip()
+                    if not content:
+                        continue
                     
-            elif msg_type == "clear_history":
-                chat_manager.clear_history(session_id)
-                await websocket.send_text(json.dumps({
-                    "type": "system",
-                    "event": "history_cleared",
+                    # Create task for response generation
+                    task = asyncio.create_task(
+                        generate_agent_response(session_id, content, safe_ws)
+                    )
+                    connection_tasks[session_id].add(task)
+                    task.add_done_callback(connection_tasks[session_id].discard)
+                    
+                elif msg_type == "form_response":
+                    request_id = data.get("request_id")
+                    user_input = data.get("data", {}).get("value", "")
+                    
+                    if request_id in pending_inputs:
+                        pending_inputs[request_id].set_result(user_input)
+                        await log_chat(f"📥 Received user input: {user_input[:50]}...", safe_ws)
+                    else:
+                        await log_chat(f"⚠️ No pending request for ID: {request_id}", safe_ws)
+                        
+                elif msg_type == "clear_history":
+                    chat_manager.clear_history(session_id)
+                    await safe_ws.send({
+                        "type": "system",
+                        "event": "history_cleared",
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                    print(f"[~] History cleared: {session_id}")
+                    
+                elif msg_type == "ping":
+                    await safe_ws.send({
+                        "type": "pong",
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                    
+            except asyncio.TimeoutError:
+                # Timeout is expected, continue loop to check connection state
+                continue
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                print(f"[!] Error processing message ({session_id}): {e}")
+                await safe_ws.send({
+                    "type": "error",
+                    "content": f"Error: {str(e)}",
                     "timestamp": datetime.now().isoformat(),
-                }))
-                print(f"[~] History cleared: {session_id}")
-                
-            elif msg_type == "ping":
-                await websocket.send_text(json.dumps({
-                    "type": "pong",
-                    "timestamp": datetime.now().isoformat(),
-                }))
+                })
                 
     except WebSocketDisconnect:
-        print(f"[-] Session closed: {session_id}")
-        # Clean up any pending futures for this session
+        print(f"[-] Session disconnected: {session_id}")
+    except Exception as e:
+        print(f"[!] Session error ({session_id}): {e}")
+    finally:
+        # Cleanup
+        await safe_ws.close()
+        
+        # Cancel all pending tasks for this session
+        for task in connection_tasks.get(session_id, set()):
+            if not task.done():
+                task.cancel()
+        
+        # Clean up pending inputs
         for request_id, future in list(pending_inputs.items()):
             if not future.done():
                 future.set_exception(Exception("WebSocket disconnected"))
-    except Exception as e:
-        print(f"[!] Error ({session_id}): {e}")
-        try:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "content": f"Server error: {str(e)}",
-                "timestamp": datetime.now().isoformat(),
-            }))
-        except:
-            pass
+        
+        # Remove from active connections
+        active_connections.pop(session_id, None)
+        connection_tasks.pop(session_id, None)
+        
+        print(f"[-] Session cleaned up: {session_id}")
 
 if __name__ == "__main__":
     import uvicorn
