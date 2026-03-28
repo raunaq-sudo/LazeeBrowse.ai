@@ -115,7 +115,12 @@ async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
     # Create a future to wait for user response
     future = asyncio.Future()
     pending_inputs[request_id] = future
-    
+    try:
+        allow_input = await safe_ws.send({
+            "type" : "processing_request_completed"
+        })
+    except:
+        pass
     try:
         # Send input request to client
         success = await safe_ws.send({
@@ -551,6 +556,9 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 data = json.loads(raw)
                 msg_type = data.get("type", "message")
                 await log_chat(f"Received message: {data}", safe_ws)
+                await safe_ws.send({
+                    "type":"processing_request"
+                })
                 if msg_type == "message":
                     content = data.get("content", "").strip()
                     if not content:
@@ -562,7 +570,9 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     )
                     connection_tasks[session_id].add(task)
                     task.add_done_callback(connection_tasks[session_id].discard)
-                    
+                    await safe_ws.send({
+                        "type": "processing_request_completed"
+                    })
                 elif msg_type == "form_response":
                     request_id = data.get("request_id")
                     user_input = data.get("content", "")
@@ -572,7 +582,9 @@ async def agent_session(websocket: WebSocket, session_id: str):
                         await log_chat(f"📥 Received user input: {user_input[:50]}...", safe_ws)
                     else:
                         await log_chat(f"⚠️ No pending request for ID: {request_id}", safe_ws)
-                        
+                    await safe_ws.send({
+                        "type": "processing_request"
+                    })
                 elif msg_type == "clear_history":
                     chat_manager.clear_history(session_id)
                     await safe_ws.send({

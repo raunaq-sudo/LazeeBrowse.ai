@@ -100,6 +100,15 @@ function handleServerMessage(data) {
       renderFiles(data.content);
       break;
     
+    case "processing_request":
+      disableSendBtn(true)
+      break;
+    
+    case "processing_request_completed":
+      disableSendBtn(false)
+      break;
+
+    
     case "pong":
       break;
   }
@@ -247,6 +256,13 @@ function setThinking(thinking) {
 function setFormInputRequired(required, request_id) {
   isFormInputRequired = required;
   formRequestId = request_id;
+
+}
+
+// -- Processing state
+
+function disableSendBtn(bool){
+  document.getElementById("sendBtn").disabled = bool;
 
 }
 
