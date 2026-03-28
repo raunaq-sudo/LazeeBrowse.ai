@@ -1,0 +1,16 @@
+{
+  "name": "electron-chat",
+  "version": "1.0.0",
+  "description": "Real-time chat app with Electron + FastAPI WebSocket",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^29.0.0"
+  },
+  "author": "ElectronChat",
+  "license": "MIT"
+}
