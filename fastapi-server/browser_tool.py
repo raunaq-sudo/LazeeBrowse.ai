@@ -12,7 +12,7 @@ class BrowserSession:
 
     def __init__(self, page):
         self.page = page
-        self.max_timeout = 12000
+        self.max_timeout = 5000
 
     async def open_url(self, url: str):
         await self.page.goto(url, timeout=self.max_timeout)

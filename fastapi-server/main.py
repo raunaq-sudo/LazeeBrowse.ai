@@ -340,12 +340,12 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             return
         
         parsed_response = clean_up_response(response)
-        await log_wrapper(f"Conversational agent response: {parsed_response.response[:100] if parsed_response.response else 'None'}...")
+        await log_wrapper(f"Conversational agent response: {parsed_response[:100] if parsed_response else 'None'}...")
         
         # Add assistant response to history
         chat_manager.update_chat_history({
             "role": "assistant", 
-            "content": parsed_response.response
+            "content": parsed_response
         }, session_id)
         
         # Send initial response
@@ -354,7 +354,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 "type": "message",
                 "role": "assistant",
                 "id": str(uuid.uuid4()),
-                "content": parsed_response.response,
+                "content": parsed_response,
                 "timestamp": datetime.now().isoformat(),
             })
         
@@ -470,7 +470,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         # Add final response to history
         chat_manager.update_chat_history({
             "role": "assistant", 
-            "content": final_response.response
+            "content": final_response
         }, session_id)
         
         # Send final response
@@ -479,7 +479,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 "type": "message",
                 "role": "assistant",
                 "id": str(uuid.uuid4()),
-                "content": final_response.response,
+                "content": final_response,
                 "timestamp": datetime.now().isoformat(),
             })
         await file_tree_data(safe_ws)
