@@ -154,6 +154,7 @@ html, body {
   display: block; font-size: 11px; font-weight: 600;
   letter-spacing: 0.04em; color: var(--text-secondary);
   margin-bottom: 6px; text-transform: uppercase;
+  margin-top: 3px;
 }
 .form-group input {
   width: 100%; background: var(--bg-base); border: 1px solid var(--border-mid);

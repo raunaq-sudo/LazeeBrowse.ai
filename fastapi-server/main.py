@@ -18,7 +18,10 @@ from typing import Optional
 
 import os
 
-from config import llm
+from config import llm, get_models
+
+llm = None
+
 
 app = FastAPI(title="AI Agent WebSocket Server")
 
@@ -709,7 +712,7 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 data = json.loads(raw)
 
                 msg_type = data.get("type", "message")
-
+                print(f"[{session_id}] {msg_type}")
                 await log_chat(f"Received message: {data}", safe_ws)
 
                 if msg_type == "message":
@@ -746,6 +749,27 @@ async def agent_session(websocket: WebSocket, session_id: str):
                         "timestamp": datetime.now().isoformat(),
                     })
 
+                elif msg_type == "llmApiAuth":
+                    api_key = data.get("api_key", "").strip()
+                    try:
+                        global llm
+                        llm = await get_models(api_key) 
+                    except Exception as e:
+                        print(f"[ERROR] {session_id}: {e}")
+                        await safe_ws.send({
+                            "type": "error",
+                            "content": f"Error: {str(e)}",
+                            "timestamp": datetime.now().isoformat(),
+                        })
+                    if llm is None:
+                        await safe_ws.send({
+                            "type": "llmApiAuthFailed",
+                            "content": f"Check Api",
+                            "timestamp": datetime.now().isoformat(),
+                            "code": "WS_SEND_FAILED"
+                        })
+                        await safe_ws.close()
+                        break
             except asyncio.TimeoutError:
                 continue
 

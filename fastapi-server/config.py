@@ -25,7 +25,9 @@ llm = ChatDeepSeek(
     temperature=0.4,
     max_tokens=None,
     timeout=None,
-    max_retries=2
+    max_retries=2,
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    
 )
 
 llm_sys_prmpt_gen = ChatDeepSeek(
@@ -33,5 +35,28 @@ llm_sys_prmpt_gen = ChatDeepSeek(
     temperature=0.4,
     max_tokens=None,
     timeout=None,
-    max_retries=2
+    max_retries=2,
+    api_key = os.getenv("DEEPSEEK_API_KEY")
 )
+
+async def get_models(api_key):
+    model =  ChatDeepSeek(
+        model="deepseek-chat",
+        temperature=0.4,
+        max_tokens=None,
+        timeout=None,
+        max_retries=2,
+        api_key = api_key
+    
+    )
+    try:
+        await model.ainvoke([
+                {
+                    "role": "user",
+                    "content": "Hello world"
+                }
+            ])
+        return model
+    except Exception as e:
+        print(str(e))
+        return None

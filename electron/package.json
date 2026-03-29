@@ -7,7 +7,9 @@
     "start": "electron .",
     "dev": "electron . --dev"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-store": "^11.0.2"
+  },
   "devDependencies": {
     "electron": "^29.0.0"
   },

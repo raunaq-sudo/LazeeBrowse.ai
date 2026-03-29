@@ -8,6 +8,7 @@ let isThinking = false;
 let isFormInputRequired = false;
 let formRequestId = null;
 let isConnecting = false;
+
 // Generate or retrieve a persistent session ID
 function getSessionId() {
   let id = localStorage.getItem("agent_session_id");
@@ -23,6 +24,7 @@ function getSessionId() {
 
 function connectToAgent() {
   const serverRaw = document.getElementById("serverInput").value.trim();
+  const api_key = document.getElementById("llmApiKey").value.trim();
   if (!serverRaw) return showError("Please enter a server URL.");
 
   // 🛑 Prevent duplicate connections
@@ -61,6 +63,10 @@ function connectToAgent() {
   ws.onopen = () => {
     isConnecting = false;
     updateBadge("connected", "Connected");
+    ws.send(JSON.stringify({
+      type:"llmApiAuth",
+      api_key:api_key
+    }))
   };
 
   ws.onmessage = (event) => {
@@ -71,24 +77,22 @@ function connectToAgent() {
   ws.onerror = () => {
     isConnecting = false;
     updateBadge("error", "Error");
-    showError("Could not connect. Is the server running?");
+    showError("Could not connect. Is the server running? Please Check you Api key.");
     document.getElementById("connectBtn").disabled = false;
   };
 
   ws.onclose = () => {
     isConnecting = false;
-
     console.log("WebSocket closed");
-
     updateBadge("", "Disconnected");
     setThinking(false);
     setInputEnabled(false);
-
+    disconnect()
     // 🧠 Optional: auto-reconnect with delay (SAFE)
-    setTimeout(() => {
-      console.log("Reconnecting...");
-      connectToAgent();
-    }, 2000);
+    // setTimeout(() => {
+    //   console.log("Reconnecting...");
+    //   connectToAgent();
+    // }, 2000);
   };
 }
 function handleServerMessage(data) {
@@ -143,6 +147,11 @@ function handleServerMessage(data) {
 
     
     case "pong":
+      break;
+
+    case "llmApiAuthFailed":
+      showError("Invalid Api Key. Please check your Api key and try again.");
+      ws = null
       break;
   }
 }
