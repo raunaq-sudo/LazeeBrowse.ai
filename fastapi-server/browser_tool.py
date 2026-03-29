@@ -808,17 +808,17 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
         """
         await log_chat(f"Updating memory with {content}")
         try:
-            if os.dir.exists("memory"):
-                os.makedirs("memory")
-            if os.path.exists("memory/memory.md"):
-                with open("memory/memory.md", "a") as f:
-                    f.write(content)
-            else:
-                with open("memory/memory.md", "w") as f:
-                    f.write(content)
-            return f"Updated memory with sucessfully."
+            # Ensure directory exists
+            os.makedirs("memory", exist_ok=True)
+
+            # Append (auto-creates file if missing)
+            with open("memory/memory.md", "a") as f:
+                f.write(content + "\n")
+
+            return "Memory updated successfully."
+
         except Exception as e:
-            return f"{e}"
+            return str(e)
 
     @tool
     async def read_memory() -> str:
@@ -838,7 +838,22 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
             return f"{e}"
 
 
-    
+    @tool
+    async def clear_memory() -> str:
+        """
+        Clear the memory.
+
+        Returns:
+            Confirmation message.
+        """
+        await log_chat(f"Clearing memory")
+        try:
+            if not os.path.exists("memory/memory.md"):
+                return "Memory not found"
+            os.remove("memory/memory.md")
+            return "Memory cleared successfully."
+        except Exception as e:
+            return f"{e}"
 
     misc_tools_list = [
         get_user_confirmation,
@@ -853,6 +868,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
         delete_directory,
         update_memory,
         read_memory,
+        
     ]
 
     browser_tools = [

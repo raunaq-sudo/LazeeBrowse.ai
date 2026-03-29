@@ -7,6 +7,7 @@ let sessionId = null;
 let isThinking = false;
 let isFormInputRequired = false;
 let formRequestId = null;
+let isConnecting = false;
 // Generate or retrieve a persistent session ID
 function getSessionId() {
   let id = localStorage.getItem("agent_session_id");
@@ -18,9 +19,27 @@ function getSessionId() {
 }
 
 // ── CONNECTION ─────────────────────────────────
+
+
 function connectToAgent() {
   const serverRaw = document.getElementById("serverInput").value.trim();
   if (!serverRaw) return showError("Please enter a server URL.");
+
+  // 🛑 Prevent duplicate connections
+  if (ws) {
+    if (ws.readyState === WebSocket.OPEN) {
+      console.log("Already connected");
+      return;
+    }
+
+    if (ws.readyState === WebSocket.CONNECTING) {
+      console.log("Connection already in progress");
+      return;
+    }
+  }
+
+  if (isConnecting) return;
+  isConnecting = true;
 
   const server = serverRaw.replace(/\/$/, "");
   sessionId = getSessionId();
@@ -33,12 +52,16 @@ function connectToAgent() {
   try {
     ws = new WebSocket(url);
   } catch {
+    isConnecting = false;
     showError("Invalid WebSocket URL.");
     document.getElementById("connectBtn").disabled = false;
     return;
   }
 
-  ws.onopen = () => updateBadge("connected", "Connected");
+  ws.onopen = () => {
+    isConnecting = false;
+    updateBadge("connected", "Connected");
+  };
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
@@ -46,18 +69,28 @@ function connectToAgent() {
   };
 
   ws.onerror = () => {
+    isConnecting = false;
     updateBadge("error", "Error");
     showError("Could not connect. Is the server running?");
     document.getElementById("connectBtn").disabled = false;
   };
 
   ws.onclose = () => {
+    isConnecting = false;
+
+    console.log("WebSocket closed");
+
     updateBadge("", "Disconnected");
     setThinking(false);
     setInputEnabled(false);
+
+    // 🧠 Optional: auto-reconnect with delay (SAFE)
+    setTimeout(() => {
+      console.log("Reconnecting...");
+      connectToAgent();
+    }, 2000);
   };
 }
-
 function handleServerMessage(data) {
   switch (data.type) {
     case "system":

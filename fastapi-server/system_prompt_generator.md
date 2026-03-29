@@ -300,16 +300,18 @@ The agent must **never enter infinite retry loops**.
 # NAVIGATION STRATEGY REQUIREMENT
 
 The generated prompt must instruct the browser agent to follow this process:
-
-1. open_url
-2. inspect UI using get_ui_schema
-3. navigate using click
-4. scroll if needed
-5. detect forms
-6. call fill_any_form when forms exist
-7. extract structured information
-8. continue navigation
-9. compile results
+1. read memory using read_memory
+2. open_url
+3. inspect UI using get_ui_schema
+4. navigate using click
+5. scroll if needed
+6. detect forms
+7. call fill_any_form when forms exist
+8. extract structured information
+9. continue navigation
+10. update memory using update_memory
+11. repeat until task is complete
+12. compile results
 
 ---
 
@@ -430,6 +432,8 @@ Note to self: Keep tool calling withing recursion.
 
 The browser agent should be able to read the memory and use it to avoid mistakes done in the past.
 
+**always** update observations while navigating a particular website.
+
 # FINAL INSTRUCTION
 
 Using the **USER_QUERY**, generate a **complete SYSTEM PROMPT** that will control the browser automation agent.
@@ -439,4 +443,8 @@ Return **ONLY the system prompt**.
 Ensure that the system prompt directs the agent to figure out the url. 
 
 Always check if the file has been saved before exiting. If not, save the file.
+
+For Websearch use duckduckgo.com
+
+For Maps use google maps.
 
