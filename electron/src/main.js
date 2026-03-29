@@ -34,12 +34,12 @@ function createWindow() {
 }
 
 // Window controls via IPC
-ipcMain.on("window:minimize", () => mainWindow?.minimize());
-ipcMain.on("window:maximize", () => {
-  if (mainWindow?.isMaximized()) mainWindow.unmaximize();
-  else mainWindow?.maximize();
-});
-ipcMain.on("window:close", () => mainWindow?.close());
+// ipcMain.on("window:minimize", () => mainWindow?.minimize());
+// ipcMain.on("window:maximize", () => {
+//   if (mainWindow?.isMaximized()) mainWindow.unmaximize();
+//   else mainWindow?.maximize();
+// });
+// ipcMain.on("window:close", () => mainWindow?.close());
 
 app.whenReady().then(() => {
   createWindow();
@@ -49,7 +49,7 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  app.quit();
 });
 
 

@@ -7,6 +7,8 @@ import shutil
 from typing import List, Dict
 
 import pypandoc
+
+import json
    
 class BrowserSession:
 
@@ -176,7 +178,7 @@ class BrowserSession:
 from langchain.tools import tool
 
 
-def build_tools(session, request_user_input, log_chat, misc_tools = False):
+def build_tools(session, request_user_input, log_chat, misc_tools = False, file_tree_wrapper = None):
     """
     Create LangChain tools bound to a BrowserSession instance.
 
@@ -541,10 +543,17 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
                 os.makedirs("files")
             with open(f"{filename}", "w") as f:
                 f.write(content)
+            
+            if file_tree_wrapper is not None:
+                await file_tree_wrapper()
             return f"Saved to file {filename}"
+
         except Exception as e:
             await log_chat(f"Error saving to file: {e}")
             return f"{e}"
+
+        
+
 
     @tool
     async def delete_file(filepath: str) -> str:
@@ -573,6 +582,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
             if not os.path.exists(filepath):
                 return f"File not found: {filepath}"
             os.remove(filepath)
+            if file_tree_wrapper is not None:
+                await file_tree_wrapper()
             return f"Deleted {filepath}"
         except Exception as e:
             await log_chat(f"Error deleting file: {e}")
@@ -597,6 +608,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
         try:
 
             os.makedirs(f"{dirname}", exist_ok=True)
+            if file_tree_wrapper is not None:
+                await file_tree_wrapper()
             return f"Created directory {dirname}"
         except Exception as e:
             await log_chat(f"Error creating directory: {e}")
@@ -620,6 +633,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
             return f"Directory not found: {dirname}"
         try:
             shutil.rmtree(f"{dirname}")
+            if file_tree_wrapper is not None:
+                await file_tree_wrapper()
             return f"Deleted directory {dirname}"
         except Exception as e:
             await log_chat(f"Error deleting directory: {e}")
@@ -648,6 +663,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
             return f"Invalid dst: {dst}. Please provide a destination path inside files/ directory."
         try:
             shutil.move(src, dst)
+            if file_tree_wrapper is not None:
+                await file_tree_wrapper()
             return f"Moved {src} → {dst}"
         except Exception as e:
             await log_chat(f"Error moving file: {e}")
@@ -795,25 +812,39 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
             return f"{e}"
 
     @tool
-    async def update_memory(content: str) -> str:
+    async def update_memory(url: str, reason: str, observation: str) -> str:
         """
-        Update the memory with the given content.
+    
+        Update the URL memory with a new observation.
 
         Args:
-            content: Content to update the memory with.
-        
+            url (str): The URL associated with the memory entry.
+            reason (str): The reason for storing this information.
+            observation (str): The observed information to be stored.
+
         Returns:
-            Confirmation message.
-        
+            str: Confirmation message indicating success or failure.
+    
         """
-        await log_chat(f"Updating memory with {content}")
+        await log_chat(f"Updating memory for url {url}")
         try:
             # Ensure directory exists
             os.makedirs("memory", exist_ok=True)
-
             # Append (auto-creates file if missing)
-            with open("memory/memory.md", "a") as f:
-                f.write(content + "\n")
+            memory = {}
+            if os.path.exists("memory/url_memory.json"):
+                with open("memory/url_memory.json", "r") as f:
+                    memory = json.load(f)
+            
+            if url in memory:
+                memory[url].append({"reason": reason, "observation": observation})
+            else:
+                memory[url] = [{"reason": reason, "observation": observation}]
+
+            with open("memory/url_memory.json", "w") as f:
+                json.dump(memory, f, indent=4)
+            
+
 
             return "Memory updated successfully."
 
@@ -823,37 +854,54 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
     @tool
     async def read_memory() -> str:
         """
-        Read the memory.
+        Read the URL memory.
 
         Returns:
-            Content of the memory.
+            JSON string of memory.
         """
-        await log_chat(f"Reading memory")
-        try:
-            if not os.path.exists("memory/memory.md"):
-                return "Memory not found"
-            with open("memory/memory.md", "r") as f:
-                return f.read()
-        except Exception as e:
-            return f"{e}"
+        await log_chat("Reading memory")
 
+        try:
+            file_path = "memory/url_memory.json"
+
+            if not os.path.exists(file_path):
+                return "Memory not found"
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                memory = json.load(f)
+
+            return json.dumps(memory, indent=2)
+
+        except Exception as e:
+            return str(e)
 
     @tool
     async def clear_memory() -> str:
         """
-        Clear the memory.
+        Clear the URL memory.
 
         Returns:
             Confirmation message.
         """
-        await log_chat(f"Clearing memory")
+        await log_chat("Clearing memory")
+
         try:
-            if not os.path.exists("memory/memory.md"):
+            file_path = "memory/url_memory.json"
+
+            if not os.path.exists(file_path):
                 return "Memory not found"
-            os.remove("memory/memory.md")
+
+            # Option 1: delete file
+            os.remove(file_path)
+
+            # Option 2 (safer): reset instead of delete
+            # with open(file_path, "w", encoding="utf-8") as f:
+            #     json.dump({}, f)
+
             return "Memory cleared successfully."
+
         except Exception as e:
-            return f"{e}"
+            return str(e)
 
     misc_tools_list = [
         get_user_confirmation,
@@ -868,6 +916,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False):
         delete_directory,
         update_memory,
         read_memory,
+        clear_memory
         
     ]
 
