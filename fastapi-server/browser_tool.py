@@ -271,7 +271,7 @@ class BrowserSession:
 from langchain.tools import tool
 
 
-def build_tools(session, request_user_input, log_chat, misc_tools = False, file_tree_wrapper = None, base_path = None):
+def build_tools(session, request_user_input, log_chat, misc_tools = False, only_browser_tools = False, file_tree_wrapper = None, base_path = None):
     """
     Create LangChain tools bound to a BrowserSession instance.
 
@@ -1216,5 +1216,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
 
     if misc_tools:
         return misc_tools_list
+    elif only_browser_tools:
+        return browser_tools
     else:
         return browser_tools + misc_tools_list

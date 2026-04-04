@@ -271,9 +271,6 @@ async def file_tree_data(safe_ws: SafeWebSocket):
         # 🔥 Avoid logging huge payloads
         await log_chat(f"File tree nodes: {len(nodes)} items", safe_ws)
 
-
-
-
         # 🔒 Safe send
         if not safe_ws.is_closed:
             await safe_ws.send({
@@ -390,7 +387,13 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             "timestamp": datetime.now().isoformat(),
         })
         
-
+        # Load router prompt
+        try:
+            conversational_agent_prompt = load_prompt("conversational_agent_system_prompt.md")
+            await log_chat(f"Conversational agent prompt loaded: {conversational_agent_prompt[:100] if conversational_agent_prompt else 'None'}...", safe_ws)
+        except FileNotFoundError:
+            conversational_agent_prompt = "You are a helpful assistant that can browse the web when needed."
+        
         # Create wrapper functions that use the safe WebSocket
         async def request_input_wrapper(message: str) -> str:
             return await request_user_input(message, safe_ws)
@@ -404,10 +407,59 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
 
         await file_tree_data(safe_ws)
+        # Create conversational agent
+        convo_agent = create_agent(
+            model=llm,
+            tools=build_tools(
+                session=None, 
+                request_user_input=request_input_wrapper,
+                log_chat=log_wrapper, 
+                misc_tools=True,
+                file_tree_wrapper=file_tree_wrapper,
+                base_path=project_dir
+            ),
+            system_prompt=conversational_agent_prompt,
+            response_format=QueryRouterResponse
+        )
+        await file_tree_data(safe_ws)
         # Get agent response with timeout
+        try:
+            response = await asyncio.wait_for(
+                convo_agent.ainvoke({"messages": chat_history}),
+                timeout=60.0
+            )
+        except asyncio.TimeoutError:
+            await log_wrapper("Agent response timeout")
+            await safe_ws.send({
+                "type": "error",
+                "content": "Agent response timeout",
+                "code": "AGENT_TIMEOUT"
+            })
+            return
         
+        parsed_response = clean_up_response(response)
+        await log_wrapper(f"Conversational agent response: {parsed_response.response[:100] if parsed_response.response else 'None'}...")
         
+        # Add assistant response to history
+        chat_manager.update_chat_history({
+            "role": "assistant", 
+            "content": parsed_response.response
+        }, session_id)
+        chat_history = chat_manager.get_chat_history(session_id)
         
+        # Send initial response
+        if not safe_ws.is_closed:
+            await safe_ws.send({
+                "type": "message",
+                "role": "assistant",
+                "id": str(uuid.uuid4()),
+                "content": parsed_response.response,
+                "timestamp": datetime.now().isoformat(),
+            })
+        
+        # Check if browsing is required
+        if not parsed_response.browsing_required:
+            return
         
         await safe_ws.send({
             "type": "agent_thinking",
@@ -426,6 +478,18 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             await log_chat(f"System prompt generator loaded: {sys_prompt_gen[:100] if sys_prompt_gen else 'None'}...", safe_ws)
         except FileNotFoundError:
             sys_prompt_gen = "Generate a system prompt for web browsing based on the conversation."
+        
+        system_prompt_agent = create_agent(
+            model=llm,
+            system_prompt=sys_prompt_gen
+        )
+        
+        response_sys_prompt = await system_prompt_agent.ainvoke({
+            "messages": chat_manager.get_chat_history(session_id)
+        })
+        
+        system_prompt = clean_up_response(response_sys_prompt)
+        await log_wrapper("✅ System prompt generated")
         
         # Check connection before browser launch
         if safe_ws.is_closed:
@@ -461,25 +525,13 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 request_user_input=request_input_wrapper,
                 log_chat=log_wrapper,
                 file_tree_wrapper=file_tree_wrapper,
-                base_path=project_dir,
-                only_browser_tools=True
+                base_path=project_dir
             )
-            from deepagents.backends import FilesystemBackend, CompositeBackend, StateBackend, StoreBackend
-
-            composite_backend = lambda rt: CompositeBackend(
-                        default=StateBackend(rt),
-                        routes={
-                            "/memories/": StoreBackend(rt),
-                        }
-                    )
-
-            await log_chat(f"Project path: {project_dir}", safe_ws)
+            
             agent = create_deep_agent(
                 model=llm,
                 tools=tools,
-                backend = FilesystemBackend(root_dir=os.path.join(project_dir,"files"), virtual_mode=True),
-                system_prompt=load_prompt("deep_agent.md")
-                
+                system_prompt=system_prompt,
             )
             await file_tree_data(safe_ws)
             await log_wrapper("🤖 Agent created. Running browser automation...")
