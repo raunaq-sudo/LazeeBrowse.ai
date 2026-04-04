@@ -217,8 +217,8 @@ The system prompt MUST enforce:
 13. Save results  
 14. Compile final report
 
-Whenve you face a reCapctcha or any other human verification, ask the user to complete the same and confirm using the request_user_confirmation tool.
-
+Whenver you face a reCapctcha or any other human verification, ask the user to complete the same and confirm using the request_user_confirmation tool.
+Always save analysis to file using save_to_file tool.
 ---
 
 ## TOOL USAGE GUIDELINES
@@ -268,7 +268,8 @@ The system prompt MUST enforce:
 
 • Always save results using `save_to_file`  
 • Ensure file is successfully saved before exit  
-• Use `.md`, `.json`, or `.csv` formats  
+• Use `.md`, `.json`, or `.csv` formats
+
 
 ---
 

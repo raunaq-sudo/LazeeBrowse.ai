@@ -430,6 +430,11 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             )
         except asyncio.TimeoutError:
             await log_wrapper("Agent response timeout")
+            await safe_ws.send({
+                "type": "error",
+                "content": "Agent response timeout",
+                "code": "AGENT_TIMEOUT"
+            })
             return
         
         parsed_response = clean_up_response(response)
@@ -456,6 +461,10 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         if not parsed_response.browsing_required:
             return
         
+        await safe_ws.send({
+            "type": "agent_thinking",
+            "timestamp": datetime.now().isoformat(),
+        })
         # -------------------------------
         # BROWSING FLOW
         # -------------------------------
