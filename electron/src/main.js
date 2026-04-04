@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
 const path = require("path");
 
 let mainWindow;
@@ -68,3 +68,12 @@ ipcMain.handle("open-file", async (event, filePath) => {
   }
 });
 
+ipcMain.handle('select-folder', async () => {
+    const result = await dialog.showOpenDialog({
+        properties: ['openDirectory', 'createDirectory']
+    });
+
+    if (result.canceled) return null;
+
+    return result.filePaths[0]; // 👈 absolute path
+});

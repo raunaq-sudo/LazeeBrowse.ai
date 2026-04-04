@@ -51,6 +51,9 @@
       <input type="text" id="serverInput" value="ws://localhost:8000" autocomplete="off" />
       <label for="llmApiKey">DEEPSEEK API KEY</label>
       <input type="text" id="llmApiKey" value="sk-*******************" autocomplete="off" />
+      <label for="agentDir">Project directory</label>
+      <input type="text" id="agentDir" readonly placeholder="Select directory" />
+      <button id="browseBtn">Browse</button>
     </div>
 
     <button class="connect-btn" id="connectBtn" onclick="connectToAgent()">
@@ -173,5 +176,14 @@
 </div>
 
 <script src="app.js"></script>
+<script>
+document.getElementById("browseBtn").addEventListener("click", async () => {
+    const path = await window.electronAPI.selectFolder();
+
+    if (path) {
+        document.getElementById("agentDir").value = path;
+    }
+});
+</script>
 </body>
 </html>

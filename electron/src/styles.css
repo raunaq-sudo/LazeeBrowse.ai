@@ -438,3 +438,25 @@ kbd {
 .side-panel.collapsed .panel-header span {
   display: none;
 }
+
+#browseBtn {
+    background: rgba(37, 99, 235, 0.15);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    padding: 10px 18px;
+    font-size: 14px;
+    border-radius: 10px;
+    backdrop-filter: blur(6px);
+    cursor: pointer;
+    transition: all 0.25s ease;
+}
+
+#browseBtn:hover {
+    background: rgba(59, 130, 246, 0.25);
+    border-color: #3b82f6;
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+}
+
+#browseBtn:active {
+    transform: scale(0.96);
+}

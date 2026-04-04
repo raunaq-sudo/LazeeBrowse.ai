@@ -25,6 +25,7 @@ function getSessionId() {
 function connectToAgent() {
   const serverRaw = document.getElementById("serverInput").value.trim();
   const api_key = document.getElementById("llmApiKey").value.trim();
+  const folderPath = document.getElementById("agentDir").value.trim();
   if (!serverRaw) return showError("Please enter a server URL.");
 
   // 🛑 Prevent duplicate connections
@@ -66,6 +67,12 @@ function connectToAgent() {
     ws.send(JSON.stringify({
       type:"llmApiAuth",
       api_key:api_key
+    })
+  )
+    ws.send(JSON.stringify({
+      type: "folderPath",
+      folder_path:folderPath
+    
     }))
   };
 

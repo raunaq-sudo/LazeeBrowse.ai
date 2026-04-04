@@ -18,10 +18,11 @@ from typing import Optional
 
 import os
 
-from config import llm, get_models
+from config import get_models
 
 llm = None
 
+project_dir = None
 
 app = FastAPI(title="AI Agent WebSocket Server")
 
@@ -179,27 +180,48 @@ async def log_chat(message: str, safe_ws: SafeWebSocket):
         "timestamp": datetime.now().isoformat(),
     })
 
+def get_user_files_dir():
+    base = os.path.join(project_dir, "files")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def resolve_user_path(relative_path: str):
+    base = get_user_files_dir()
+    clean = relative_path.replace("files/", "", 1)
+    full_path = os.path.join(base, clean)
+
+    # 🔒 Prevent path traversal
+    if not os.path.abspath(full_path).startswith(os.path.abspath(base)):
+        raise Exception("Invalid file path (security violation)")
+
+    return full_path
+
+
+
+
 async def file_tree_data(safe_ws: SafeWebSocket):
     """
-    Get all files and folders inside the 'files' directory recursively.
+    Get all files and folders inside the user files directory recursively.
 
-    Returns:
-        A dictionary containing a list of all nodes (files + folders).
+    Sends the result to the frontend via WebSocket.
     """
 
-    await log_chat("Getting full file tree (including empty folders)", safe_ws)
-
+    await log_chat("Getting full file tree", safe_ws)
+    await log_chat(f"Project dir: {project_dir}", safe_ws)
     try:
-        os.makedirs("files", exist_ok=True)
-
+        base_dir = get_user_files_dir()
+        await log_chat(f"Base dir: {base_dir}", safe_ws)
         nodes = []
 
-        for root, dirs, files in os.walk("files"):
-            
-            # ✅ Add folders (including empty ones)
+        for root, dirs, files in os.walk(base_dir):
+
+            # ✅ Folders (including empty ones)
             for d in dirs:
-                full_path = os.path.abspath(os.path.join(root, d))
-                project_path = os.path.join(root, d)
+                full_path = os.path.join(root, d)
+
+                rel = os.path.relpath(full_path, base_dir)
+                project_path = f"files/{rel.replace(os.sep, '/')}"
 
                 nodes.append({
                     "name": d,
@@ -208,10 +230,12 @@ async def file_tree_data(safe_ws: SafeWebSocket):
                     "type": "folder"
                 })
 
-            # ✅ Add files
+            # ✅ Files
             for f in files:
-                full_path = os.path.abspath(os.path.join(root, f))
-                project_path = os.path.join(root, f)
+                full_path = os.path.join(root, f)
+
+                rel = os.path.relpath(full_path, base_dir)
+                project_path = f"files/{rel.replace(os.sep, '/')}"
 
                 nodes.append({
                     "name": f,
@@ -220,22 +244,31 @@ async def file_tree_data(safe_ws: SafeWebSocket):
                     "type": "file"
                 })
 
-        result = {
-            "nodes": nodes
-        }
+        result = {"nodes": nodes}
 
-        await log_chat(str(result), safe_ws)
+        # 🔥 Avoid logging huge payloads
+        await log_chat(f"File tree nodes: {len(nodes)} items", safe_ws)
 
+        # 🔒 Safe send
         if not safe_ws.is_closed:
             await safe_ws.send({
                 "type": "files",
                 "content": result
             })
 
+        return result
+
     except Exception as e:
-        await log_chat(f"Error getting all files: {e}", safe_ws)
+        await log_chat(f"Error getting files: {e}", safe_ws)
+
+        if not safe_ws.is_closed:
+            await safe_ws.send({
+                "type": "error",
+                "content": str(e),
+                "code": "FILE_TREE_ERROR"
+            })
+
         return {"error": str(e)}
-    
 
 def clean_up_response(response):
     def extract_text(content):
@@ -360,7 +393,8 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 request_user_input=request_input_wrapper,
                 log_chat=log_wrapper, 
                 misc_tools=True,
-                file_tree_wrapper=file_tree_wrapper
+                file_tree_wrapper=file_tree_wrapper,
+                base_path=project_dir
             ),
             system_prompt=conversational_agent_prompt,
             response_format=QueryRouterResponse
@@ -458,7 +492,8 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 session=session,
                 request_user_input=request_input_wrapper,
                 log_chat=log_wrapper,
-                file_tree_wrapper=file_tree_wrapper
+                file_tree_wrapper=file_tree_wrapper,
+                base_path=project_dir
             )
             
             agent = create_deep_agent(
@@ -770,6 +805,12 @@ async def agent_session(websocket: WebSocket, session_id: str):
                         })
                         await safe_ws.close()
                         break
+
+                elif msg_type=="folderPath":
+                    global project_dir
+                    print(f"[FOLDER PATH] {project_dir}")
+                    project_dir = data.get("folder_path", "").strip()
+                    print(f"Data : {data}")
             except asyncio.TimeoutError:
                 continue
 
@@ -799,4 +840,5 @@ async def agent_session(websocket: WebSocket, session_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
+    # uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False, log_level="info")

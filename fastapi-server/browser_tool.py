@@ -7,9 +7,29 @@ import shutil
 from typing import List, Dict
 
 import pypandoc
-
+import sys
 import json
-   
+
+def get_base_path():
+    if getattr(sys, "frozen", False):
+        return sys._MEIPASS
+    return os.getcwd()
+
+def get_user_memory_path(base_path: str):
+    base = base_path
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "url_memory.json")
+
+def get_user_files_dir(base_path: str):
+    base = os.path.join(base_path, "files")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+def resolve_user_path(base_path, relative_path: str):
+    base = get_user_files_dir(base_path)
+    return os.path.join(base, relative_path.replace("files/", ""))
+
+
 class BrowserSession:
 
     def __init__(self, page):
@@ -178,7 +198,7 @@ class BrowserSession:
 from langchain.tools import tool
 
 
-def build_tools(session, request_user_input, log_chat, misc_tools = False, file_tree_wrapper = None):
+def build_tools(session, request_user_input, log_chat, misc_tools = False, file_tree_wrapper = None, base_path = None):
     """
     Create LangChain tools bound to a BrowserSession instance.
 
@@ -468,60 +488,85 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
         except Exception as e:
             return f"{e}"
         
+    # -------------------------------
+    # HELPERS (ADD ONCE)
+    # -------------------------------
+    def get_user_files_dir(base_path = base_path):
+        base = os.path.join(base_path, "files")
+        os.makedirs(base, exist_ok=True)
+        return base
+
+
+    def resolve_user_path(relative_path: str):
+        base = get_user_files_dir()
+        clean = relative_path.replace("files/", "", 1)
+        full_path = os.path.join(base, clean)
+
+        # 🔒 Prevent path traversal
+        if not os.path.abspath(full_path).startswith(os.path.abspath(base)):
+            raise Exception("Invalid file path (security violation)")
+
+        return full_path
+
+    def get_user_memory_path():
+        base = get_user_files_dir()
+        os.makedirs(base, exist_ok=True)
+        if not os.path.exists(os.path.join(base, "url_memory.json")):
+            with open(os.path.join(base, "url_memory.json"), "w") as f:
+                f.write("{}")
+        return os.path.join(base, "url_memory.json")
+
+    # -------------------------------
+    # GET FILE TREE
+    # -------------------------------
     @tool
     async def get_all_files():
         """
-        Get all files and folders inside the 'files' directory recursively.
+        Get a list of all files in the user's files directory.
 
         Returns:
-            A dictionary containing a list of all nodes (files + folders).
+            A list of dictionaries with file information.
         """
-
-        await log_chat("Getting full file tree (including empty folders)")
+        await log_chat("Getting full file tree")
 
         try:
-            os.makedirs("files", exist_ok=True)
-
+            base_dir = get_user_files_dir()
             nodes = []
 
-            for root, dirs, files in os.walk("files"):
-                
-                # ✅ Add folders (including empty ones)
+            for root, dirs, files in os.walk(base_dir):
+
                 for d in dirs:
-                    full_path = os.path.abspath(os.path.join(root, d))
-                    project_path = os.path.join(root, d)
+                    full_path = os.path.join(root, d)
+                    rel = os.path.relpath(full_path, base_dir)
 
                     nodes.append({
                         "name": d,
                         "path": full_path,
-                        "project_path": project_path,
+                        "project_path": f"files/{rel.replace(os.sep, '/')}",
                         "type": "folder"
                     })
 
-                # ✅ Add files
                 for f in files:
-                    full_path = os.path.abspath(os.path.join(root, f))
-                    project_path = os.path.join(root, f)
+                    full_path = os.path.join(root, f)
+                    rel = os.path.relpath(full_path, base_dir)
 
                     nodes.append({
                         "name": f,
                         "path": full_path,
-                        "project_path": project_path,
+                        "project_path": f"files/{rel.replace(os.sep, '/')}",
                         "type": "file"
                     })
 
-            result = {
-                "nodes": nodes
-            }
-
-            await log_chat(str(result))
-
-            return result
+            return {"nodes": nodes}
 
         except Exception as e:
-            await log_chat(f"Error getting all files: {e}")
+            await log_chat(f"Error getting files: {e}")
             return {"error": str(e)}
-        
+
+
+    # -------------------------------
+    # SAVE FILE
+    # -------------------------------
     @tool
     async def save_to_file(content: str, filename: str) -> str:
         """
@@ -529,165 +574,224 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
 
         Args:
             content: Content to save.
-            filename: Name of the file with extension and directory if applicable
+            filename: Name of the file.
 
         Returns:
             Confirmation message.
         """
-        await log_chat("Saving to file")
-        await log_chat(f"Filename: {filename}")
+        await log_chat(f"Saving file: {filename}")
+
         if not filename.startswith("files/"):
-            return f"Invalid filename: {filename}. Please provide a filename inside files/ directory."
+            return "Invalid filename. Must start with 'files/'"
+
         try:
-            if not os.path.exists("files"):
-                os.makedirs("files")
-            with open(f"{filename}", "w") as f:
+            full_path = resolve_user_path(filename)
+
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+            tmp_path = full_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            
-            if file_tree_wrapper is not None:
+
+            os.replace(tmp_path, full_path)
+
+            if file_tree_wrapper:
                 await file_tree_wrapper()
-            return f"Saved to file {filename}"
+
+            return f"Saved to {filename}"
 
         except Exception as e:
-            await log_chat(f"Error saving to file: {e}")
-            return f"{e}"
-
-        
+            await log_chat(f"Save error: {e}")
+            return str(e)
 
 
+    # -------------------------------
+    # READ FILE
+    # -------------------------------
+    @tool
+    async def read_file(filepath: str) -> str:
+        """
+        Read the content of a file.
+
+        Args:
+            filepath: Path of the file.
+
+        Returns:
+            Content of the file.
+        """
+        await log_chat(f"Reading file: {filepath}")
+
+        try:
+            full_path = resolve_user_path(filepath)
+
+            if not os.path.exists(full_path):
+                return f"File not found: {filepath}"
+
+            with open(full_path, "r", encoding="utf-8") as f:
+                return f.read()
+
+        except Exception as e:
+            return str(e)
+
+
+    # -------------------------------
+    # DELETE FILE
+    # -------------------------------
     @tool
     async def delete_file(filepath: str) -> str:
         """
         Delete a file.
 
         Args:
-            filepath: Name of the file to delete with the path.
-        
+            filepath: Path of the file.
+
         Returns:
             Confirmation message.
         """
         await log_chat(f"Deleting file: {filepath}")
-        if not os.path.exists(filepath):
-            return f"File not found: {filepath}"
+
         if not filepath.startswith("files/"):
-            return f"Invalid filepath: {filepath}"
-        if os.path.isdir(filepath):
-            return f"Invalid filepath: {filepath}. It is a directory. Please provide a file path."
-        
-        user_confirmation = await get_user_confirmation(f"Are you sure you want to delete {filepath}?")
+            return "Invalid filepath"
 
-        if not user_confirmation:
-            return f"File not deleted as per user confirmation."
         try:
-            if not os.path.exists(filepath):
-                return f"File not found: {filepath}"
-            os.remove(filepath)
-            if file_tree_wrapper is not None:
-                await file_tree_wrapper()
-            return f"Deleted {filepath}"
-        except Exception as e:
-            await log_chat(f"Error deleting file: {e}")
-            return f"{e}"
+            full_path = resolve_user_path(filepath)
 
+            if not os.path.exists(full_path):
+                return f"File not found: {filepath}"
+
+            if os.path.isdir(full_path):
+                return "Path is a directory, not a file"
+
+            confirm = await get_user_confirmation(f"Delete {filepath}?")
+            if "true" not in confirm.lower():
+                return "Cancelled by user"
+
+            os.remove(full_path)
+
+            if file_tree_wrapper:
+                await file_tree_wrapper()
+
+            return f"Deleted {filepath}"
+
+        except Exception as e:
+            await log_chat(f"Delete error: {e}")
+            return str(e)
+
+
+    # -------------------------------
+    # CREATE DIRECTORY
+    # -------------------------------
     @tool
     async def create_directory(dirname: str) -> str:
         """
         Create a directory.
 
         Args:
-            dirname: Name of the directory to create.
-        
+            dirname: Name of the directory.
+
         Returns:
             Confirmation message.
         """
         await log_chat(f"Creating directory: {dirname}")
+
         if not dirname.startswith("files/"):
-            return f"Invalid dirname: {dirname}. Please provide a directory name inside files/ directory."
-        if os.path.exists(f"{dirname}"):
-            return f"Directory already exists: {dirname}"
+            return "Invalid directory name"
+
         try:
+            dir_path = resolve_user_path(dirname)
 
-            os.makedirs(f"{dirname}", exist_ok=True)
-            if file_tree_wrapper is not None:
+            if os.path.exists(dir_path):
+                return "Directory already exists"
+
+            os.makedirs(dir_path, exist_ok=True)
+
+            if file_tree_wrapper:
                 await file_tree_wrapper()
-            return f"Created directory {dirname}"
-        except Exception as e:
-            await log_chat(f"Error creating directory: {e}")
-            return f"{e}"
 
+            return f"Created {dirname}"
+
+        except Exception as e:
+            return str(e)
+
+
+    # -------------------------------
+    # DELETE DIRECTORY
+    # -------------------------------
     @tool
     async def delete_directory(dirname: str) -> str:
         """
         Delete a directory.
 
         Args:
-            dirname: Name of the directory to delete.
-        
+            dirname: Name of the directory.
+
         Returns:
             Confirmation message.
         """
         await log_chat(f"Deleting directory: {dirname}")
-        if not dirname.startswith("files/"):
-            return f"Invalid dirname: {dirname}. Please provide a directory name inside files/ directory."
-        if not os.path.exists(f"{dirname}"):
-            return f"Directory not found: {dirname}"
-        try:
-            shutil.rmtree(f"{dirname}")
-            if file_tree_wrapper is not None:
-                await file_tree_wrapper()
-            return f"Deleted directory {dirname}"
-        except Exception as e:
-            await log_chat(f"Error deleting directory: {e}")
-            return f"{e}"
 
+        if not dirname.startswith("files/"):
+            return "Invalid directory name"
+
+        try:
+            dir_path = resolve_user_path(dirname)
+
+            if not os.path.exists(dir_path):
+                return "Directory not found"
+
+            shutil.rmtree(dir_path)
+
+            if file_tree_wrapper:
+                await file_tree_wrapper()
+
+            return f"Deleted {dirname}"
+
+        except Exception as e:
+            return str(e)
+
+
+    # -------------------------------
+    # MOVE FILE
+    # -------------------------------
     @tool
     async def move_file(src: str, dst: str) -> str:
         """
         Move a file.
 
         Args:
-            src: Source file path.
-            dst: Destination file path.
-        
+            src: Source path.
+            dst: Destination path.
+
         Returns:
             Confirmation message.
         """
         await log_chat(f"Moving file: {src} → {dst}")
-        if not os.path.exists(src):
-            return f"File not found: {src}"
-        if os.path.exists(dst):
-            return f"File already exists at destination: {dst}"
-        if not src.startswith("files/"):
-            return f"Invalid src: {src}. Please provide a source path inside files/ directory."
-        if not dst.startswith("files/"):
-            return f"Invalid dst: {dst}. Please provide a destination path inside files/ directory."
+
+        if not src.startswith("files/") or not dst.startswith("files/"):
+            return "Invalid paths"
+
         try:
-            shutil.move(src, dst)
-            if file_tree_wrapper is not None:
+            src_path = resolve_user_path(src)
+            dst_path = resolve_user_path(dst)
+
+            if not os.path.exists(src_path):
+                return "Source not found"
+
+            if os.path.exists(dst_path):
+                return "Destination already exists"
+
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+
+            shutil.move(src_path, dst_path)
+
+            if file_tree_wrapper:
                 await file_tree_wrapper()
+
             return f"Moved {src} → {dst}"
+
         except Exception as e:
-            await log_chat(f"Error moving file: {e}")
-            return f"{e}"
-
-    @tool
-    async def read_file(filepath: str) -> str:
-        """
-        Read content from a file.
-
-        Args:
-            filepath: Name of the file to read with the path.
-
-        Returns:
-            Content of the file.
-        """
-        await log_chat("Reading file")
-        try:
-            with open(filepath, "r") as f:
-                return f.read()
-        except Exception as e:
-            return f"{e}"
-
+            await log_chat(f"Move error: {e}")
+            return str(e)
     @tool
     async def get_user_input_from_options(options: str) -> str:
         """
@@ -814,58 +918,60 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
     @tool
     async def update_memory(url: str, reason: str, observation: str) -> str:
         """
-    
         Update the URL memory with a new observation.
-
-        Args:
-            url (str): The URL associated with the memory entry.
-            reason (str): The reason for storing this information.
-            observation (str): The observed information to be stored.
-
-        Returns:
-            str: Confirmation message indicating success or failure.
-    
         """
+
         await log_chat(f"Updating memory for url {url}")
+
         try:
-            # Ensure directory exists
-            os.makedirs("memory", exist_ok=True)
-            # Append (auto-creates file if missing)
+            file_path = get_user_memory_path()
+
             memory = {}
-            if os.path.exists("memory/url_memory.json"):
-                with open("memory/url_memory.json", "r") as f:
-                    memory = json.load(f)
-            
+
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        memory = json.load(f)
+                except json.JSONDecodeError:
+                    memory = {}
+
             if url in memory:
-                memory[url].append({"reason": reason, "observation": observation})
+                memory[url].append({
+                    "reason": reason,
+                    "observation": observation
+                })
             else:
-                memory[url] = [{"reason": reason, "observation": observation}]
+                memory[url] = [{
+                    "reason": reason,
+                    "observation": observation
+                }]
 
-            with open("memory/url_memory.json", "w") as f:
+            # 🔥 atomic write (safe)
+            tmp_path = file_path + ".tmp"
+
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(memory, f, indent=4)
-            
 
+            os.replace(tmp_path, file_path)
 
             return "Memory updated successfully."
 
         except Exception as e:
+            await log_chat(f"Memory error: {e}")
             return str(e)
 
     @tool
     async def read_memory() -> str:
         """
         Read the URL memory.
-
-        Returns:
-            JSON string of memory.
         """
         await log_chat("Reading memory")
 
         try:
-            file_path = "memory/url_memory.json"
+            file_path = get_user_memory_path()
 
             if not os.path.exists(file_path):
-                return "Memory not found"
+                return "{}"
 
             with open(file_path, "r", encoding="utf-8") as f:
                 memory = json.load(f)
@@ -874,29 +980,21 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
 
         except Exception as e:
             return str(e)
-
+        
     @tool
     async def clear_memory() -> str:
         """
         Clear the URL memory.
-
-        Returns:
-            Confirmation message.
         """
         await log_chat("Clearing memory")
 
         try:
-            file_path = "memory/url_memory.json"
+            file_path = get_user_memory_path()
 
             if not os.path.exists(file_path):
-                return "Memory not found"
+                return "Memory already empty"
 
-            # Option 1: delete file
             os.remove(file_path)
-
-            # Option 2 (safer): reset instead of delete
-            # with open(file_path, "w", encoding="utf-8") as f:
-            #     json.dump({}, f)
 
             return "Memory cleared successfully."
 
