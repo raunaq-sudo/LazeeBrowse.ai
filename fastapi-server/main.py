@@ -352,12 +352,11 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             print(f"Connection closed for {session_id}, skipping response generation")
             return
         
-        # Get chat history
-        chat_history = chat_manager.get_chat_history(session_id)
         
         # Add user message
         user_message_obj = {"role": "user", "content": user_message}
         chat_manager.update_chat_history(user_message_obj, session_id)
+        chat_history = chat_manager.get_chat_history(session_id)
         
         # Send thinking indicator
         await safe_ws.send({
@@ -418,6 +417,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             "role": "assistant", 
             "content": parsed_response.response
         }, session_id)
+        chat_history = chat_manager.get_chat_history(session_id)
         
         # Send initial response
         if not safe_ws.is_closed:
@@ -545,6 +545,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             "role": "assistant", 
             "content": final_response
         }, session_id)
+        chat_history = chat_manager.get_chat_history(session_id)
         
         # Send final response
         if not safe_ws.is_closed:
