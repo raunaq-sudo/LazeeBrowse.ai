@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog, powerSaveBlocker } = require("electron");
 const path = require("path");
 
 let mainWindow;
@@ -46,6 +46,9 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+  blockerId = powerSaveBlocker.start('prevent-display-sleep');
+
+  console.log('Power save blocker started:', blockerId);
 });
 
 app.on("window-all-closed", () => {

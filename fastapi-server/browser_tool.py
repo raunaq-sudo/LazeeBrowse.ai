@@ -9,6 +9,7 @@ from typing import List, Dict
 import pypandoc
 import sys
 import json
+import datetime
 
 def get_base_path():
     if getattr(sys, "frozen", False):
@@ -30,87 +31,182 @@ def resolve_user_path(base_path, relative_path: str):
     return os.path.join(base, relative_path.replace("files/", ""))
 
 
+import os
+from typing import Dict, Optional
+
+
 class BrowserSession:
-
-    def __init__(self, page):
-        self.page = page
+    def __init__(self, context):
+        self.context = context
+        self.pages: Dict[str, any] = {}
         self.max_timeout = 5000
+        self.active_page: Optional[str] = None
 
-    async def open_url(self, url: str):
-        await self.page.goto(url, timeout=self.max_timeout)
-        time.sleep(1)
-        await self.page.mouse.click(0,200)
-        return f"Opened {url}"
+        # Auto-detect new tabs
+        self.context.on("page", self._on_new_page)
 
-    async def click(self, selector: str):
-        await self.page.click(selector)
-        return f"Clicked {selector}"
+    # ---------------- TAB MANAGEMENT ---------------- #
 
-    async def type_text(self, selector: str, text: str):
-        await self.clear(selector)
-        await self.page.type(selector, text)
-        return f"Typed '{text}' into {selector}"
+    async def _on_new_page(self, page):
+        await page.wait_for_load_state()
+        page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
+        name = f"auto_{len(self.pages)+1}"
+        self.pages[name] = page
+        self.active_page = name
+        print(f"[NEW TAB] {name} -> {page.url}")
 
-    async def scroll(self, amount: int = 1000):
-        await self.page.mouse.wheel(0, amount)
-        return f"Scrolled {amount}px"
+    async def new_page(self, name: str, url: str):
+        # Prevent duplicate tabs
+        for existing_name, p in self.pages.items():
+            if url in p.url:
+                return f"[INFO] Reusing tab '{existing_name}'"
 
-    async def get_page_text(self):
-        return await self.page.inner_text("body")
+        page = await self.context.new_page()
+        await page.goto(url, timeout=self.max_timeout)
+        await page.wait_for_load_state("networkidle")
 
-    async def get_title(self):
-        return await self.page.title()
+        self.pages[name] = page
+        self.active_page = name
 
-    async def submit_form(self):
-        await self.page.keyboard.press("Enter")
-        return f"Form submited."
+        return f"[OPENED] {url} -> {name}"
 
-    async def login(self):
-        try:
-            await self.page.click("text=Sign in", timeout=self.max_timeout)
-        except Exception as e:
-            print(f"Error clicking sign in: {e}")
-            await self.open_url("https://www.linkedin.com/login?fromSignIn=true&trk=guest_homepage-basic_nav-header-signin")
-            pass
-        try:
-            await self.page.fill("input[id='username']", os.getenv("LINKEDIN_USERNAME"), timeout=self.max_timeout)
-        except Exception as e:
-            print(f"Error typing username: {e}")
+    async def get_page(self, name: Optional[str] = None):
+        name = name or self.active_page
+        if name not in self.pages:
+            # Create new page
+            print("New page opened. As Name of page was not found.")
+            await self.new_page(name=name, url="https://www.duckduckgo.com")
+        
+        if name is None and self.active_page is None:
+            raise Exception("No active page and no page name provided")
+        
+        if name is None and self.active_page is not None:
+            name = self.active_page
+            
+
+        return self.pages[name]
+
+    def list_tabs(self):
+        return list(self.pages.keys())
+
+    async def list_tabs_detailed(self):
+        result = []
+        for name, page in self.pages.items():
             try:
-                await self.page.fill("input[id='email-or-phone']", os.getenv("LINKEDIN_USERNAME"), timeout=self.max_timeout)
-            except Exception as e:
-                print(f"Error typing username: {e}")
-                pass
+                result.append({
+                    "name": name,
+                    "url": page.url,
+                    "title": await page.title()
+                })
+            except:
+                result.append({
+                    "name": name,
+                    "url": page.url,
+                    "title": "Unavailable"
+                })
+        return result
 
-        try:
-            await self.page.fill("input[id='password']", os.getenv("LINKEDIN_PASSWORD"), timeout=self.max_timeout)
-        except Exception as e:
-            print(f"Error typing password: {e}")
-            pass
-        try:
-            await self.page.click("button[type='submit']", timeout=self.max_timeout)
-        except Exception as e:
-            print(f"Error clicking submit: {e}")
-            pass
-        return "Logged in"
+    async def close_page(self, name: str):
+        page = await self.get_page(name)
+        await page.close()
+        del self.pages[name]
 
-    async def get_ui_schema(self):
-        return await self.page.evaluate("""
+        if self.active_page == name:
+            self.active_page = next(iter(self.pages), None)
+
+        return f"[CLOSED] {name}"
+
+    def switch_tab(self, name: str):
+        if name not in self.pages:
+            raise Exception(f"Tab '{name}' not found")
+        self.active_page = name
+        return f"[SWITCHED] {name}"
+
+    def find_tab_by_url(self, keyword: str):
+        for name, page in self.pages.items():
+            if keyword in page.url:
+                return name
+        return None
+
+    # ---------------- ACTIONS ---------------- #
+
+    async def open_url(self, url: str, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        await page.goto(url, timeout=self.max_timeout)
+        await page.wait_for_load_state("networkidle")
+        return f"[{page_name or self.active_page}] Opened {url}"
+
+    async def click(self, selector: str, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        await page.click(selector, timeout=self.max_timeout)
+        return f"[CLICK] {selector}"
+
+    async def type_text(self, selector: str, text: str, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        await page.fill(selector, "")
+        await page.type(selector, text)
+        return f"[TYPE] {text}"
+
+    async def scroll(self, amount: int = 1000, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        await page.mouse.wheel(0, amount)
+        return f"[SCROLL] {amount}px"
+
+    async def clear(self, selector: str, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        await page.fill(selector, "")
+        return f"[CLEAR] {selector}"
+
+    async def submit_form(self, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        await page.keyboard.press("Enter")
+        return "[FORM SUBMITTED]"
+
+    # ---------------- EXTRACTION ---------------- #
+
+    async def get_page_text(self, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        return await page.inner_text("body")
+
+    async def get_title(self, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        return await page.title()
+
+    async def get_all_links(self, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        return await page.evaluate("""
+        () => Array.from(document.querySelectorAll("a")).map(a => a.href)
+        """)
+
+    async def get_all_links_with_text(self, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        return await page.evaluate("""
+        () => Array.from(document.querySelectorAll("a"))
+            .map(a => ({ text: a.innerText, href: a.href }))
+        """)
+
+    async def get_all_headings(self, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        return await page.evaluate("""
+        () => Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"))
+            .map(h => h.innerText)
+        """)
+
+    async def get_ui_schema(self, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+        return await page.evaluate("""
         () => {
-
             function visible(el) {
                 const style = window.getComputedStyle(el);
-                return style && style.display !== 'none' && style.visibility !== 'hidden';
+                return style.display !== 'none' && style.visibility !== 'hidden';
             }
 
             const elements = [];
 
             document.querySelectorAll("button, a, input, textarea, select").forEach(el => {
-
                 if (!visible(el)) return;
 
-                const tag = el.tagName.toLowerCase();
-
+                let tag = el.tagName.toLowerCase();
                 let type = tag;
                 let text = el.innerText || el.value || "";
 
@@ -122,78 +218,55 @@ class BrowserSession:
                 }
 
                 elements.push({
-                    type: type,
+                    type,
                     text: text.trim(),
                     placeholder: el.placeholder || null,
                     name: el.name || null,
                     id: el.id || null
                 });
-
             });
 
             return elements;
-
         }
         """)
 
-    async def get_all_links(self):
-        return await self.page.evaluate("""
-        () => {
-            const links = [];
-            document.querySelectorAll("a").forEach(el => {
-                links.push(el.href);
-            });
-            return links;
-        }
-        """)
+    # ---------------- FILE UPLOAD ---------------- #
 
-    async def get_all_headings(self):
-        return await self.page.evaluate("""
-        () => {
-            const headings = [];
-            document.querySelectorAll("h1, h2, h3, h4, h5, h6").forEach(el => {
-                headings.push(el.innerText);
-            });
-            return headings;
-        }
-        """)
-    
-    async def clear(self, selector: str):
-        await self.page.fill(selector, "")
-        return f"Cleared {selector}"
-    
-    async def get_all_links_with_text(self):
-        return await self.page.evaluate("""
-        () => {
-            const links = [];
-            document.querySelectorAll("a").forEach(el => {
-                links.push({text: el.innerText, href: el.href});
-            });
-            return links;
-        }
-        """)
-    
-    async def upload_file(self, selector: str, file_path: str) -> str:
+    async def upload_file(self, selector: str, file_path: str, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
 
         if not os.path.exists(file_path):
-            return f"File not found: {file_path}"
+            return f"[ERROR] File not found: {file_path}"
 
-        try:
-            await self.page.set_input_files(selector, file_path)
-            return f"Uploaded {file_path} to {selector}"
-        except Exception as e:
-            return f"Upload failed: {str(e)}"
+        await page.set_input_files(selector, file_path)
+        return f"[UPLOADED] {file_path}"
 
-    async def upload_with_click(self, button_selector: str, file_path: str) -> str:
+    async def upload_with_click(self, button_selector: str, file_path: str, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
 
-        async with self.page.expect_file_chooser() as fc:
-            await self.page.click(button_selector)
+        async with page.expect_file_chooser() as fc:
+            await page.click(button_selector)
 
         file_chooser = await fc.value
         await file_chooser.set_files(file_path)
 
-        return f"Uploaded {file_path} via button"
-    
+        return f"[UPLOADED VIA BUTTON] {file_path}"
+
+    # ---------------- LOGIN (LINKEDIN EXAMPLE) ---------------- #
+
+    async def login_linkedin(self, page_name: Optional[str] = None):
+        page = await self.get_page(page_name)
+
+        try:
+            await page.click("text=Sign in", timeout=self.max_timeout)
+        except:
+            await page.goto("https://www.linkedin.com/login")
+
+        await page.fill("input[id='username']", os.getenv("LINKEDIN_USERNAME"))
+        await page.fill("input[id='password']", os.getenv("LINKEDIN_PASSWORD"))
+        await page.click("button[type='submit']")
+
+        return "[LOGGED IN]"
 
 from langchain.tools import tool
 
@@ -208,93 +281,172 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
     """
 
     @tool
-    async def open_url(url: str) -> str:
+    async def list_tabs() -> str:
+        """
+        List all open browser tabs.
+
+        Returns:
+            A list of tab names.
+        """
+        await log_chat("Listing tabs")
+        try:
+            return await session.list_tabs()
+        except Exception as e:
+            return f"{e}"
+    @tool
+    async def list_tabs_detailed() -> str:
+        """
+        List all open browser tabs with detailed information.
+
+        Returns:
+            A list of dictionaries with tab name, URL, and title.
+        """
+        await log_chat("Listing tabs detailed")
+        try:
+            return await session.list_tabs_detailed()
+        except Exception as e:
+            return f"{e}"
+    
+    @tool
+    async def close_tab(name: str) -> str:
+        """
+        Close a specific browser tab.
+
+        Args:
+            name: Name of the tab to close.
+        Returns:
+            Confirmation message that the tab was closed.
+        """
+        await log_chat(f"Closing tab {name}")
+        try:
+            return await session.close_tab(name)
+        except Exception as e:
+            return f"{e}"
+    
+    @tool
+    async def switch_tab(name: str) -> str:
+        """
+        Switch to a specific browser tab.
+
+        Args:
+            name: Name of the tab to switch to.
+        Returns:
+            Confirmation message that the tab was switched to.
+        """
+        await log_chat(f"Switching to tab {name}")
+        try:
+            return await session.switch_tab(name)
+        except Exception as e:
+            return f"{e}"
+    
+    @tool
+    async def open_new_tab(url, page_name) -> str:
+        """
+        Open a new browser tab.
+        Args:
+            page_name: Name of the new tab.
+            url: URL to open in the new tab.
+        Returns:
+            Confirmation message that a new tab was opened.
+        """
+        await log_chat("Opening new tab")
+        try:
+            return await session.new_page(page_name, url=url)
+        except Exception as e:
+            return f"{e}"
+
+    @tool
+    async def open_url(url: str, page_name: Optional[str] = None) -> str:
         """
         Navigate the browser to a specific URL.
 
         Args:
             url: The full URL to open.
-
+            page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
             Confirmation message that the page was opened.
         """
         await log_chat(f"Opening {url}")
         try:
-            return await session.open_url(url)
+            return await session.open_url(url, page_name)
         except Exception as e:
+            await log_chat(f"Error opening {url}: {e}")
             return f"{e}"
+        
 
     @tool
-    async def click(selector: str) -> str:
+    async def click(selector: str, page_name: Optional[str] = None) -> str:
         """
         Click an element on the page.
 
         Args:
             selector: A Playwright-compatible selector such as
             'text=Login', '#submit', or 'button:has-text("Login")'.
-
+            page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
             Confirmation message indicating which element was clicked.
         """
         await log_chat(f"Clicking {selector}")
         try:
-            return await session.click(selector)
+            return await session.click(selector, page_name)
         except Exception as e:
             return f"{e}"
 
     @tool
-    async def type_text(selector: str, text: str) -> str:
+    async def type_text(selector: str, text: str, page_name: Optional[str] = None) -> str:
         """
         Type text into an input field.
 
         Args:
             selector: Selector identifying the input element.
             text: Text to type into the field.
+            page_name: Optional name for the page. If not provided, uses the current page.
 
         Returns:
             Confirmation message of the typing action.
         """
         await log_chat(f"Typing {text} into {selector}")
         try:
-            return await session.type_text(selector, text)
+            return await session.type_text(selector, text, page_name)
         except Exception as e:
             return f"{e}"
 
     @tool
-    async def scroll(amount: int) -> str:
+    async def scroll(amount: int, page_name: Optional[str] = None) -> str:
         """
         Scroll the current page vertically.
 
         Args:
             amount: Number of pixels to scroll down.
-
+            page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
             Confirmation message indicating scroll distance.
         """
         await log_chat(f"Scrolling {amount}px")
         try:
-            return await session.scroll(amount)
+            return await session.scroll(amount, page_name)
         except Exception as e:
             return f"{e}"
 
     @tool
-    async def get_page_text() -> str:
+    async def get_page_text(page_name: Optional[str] = None) -> str:
         """
         Retrieve all visible text from the page body.
 
         Useful when the agent needs to read or summarize page content.
-
+        Args:
+            page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
             Full visible text of the webpage.
         """
         await log_chat("Getting page text")
         try:
-            return await session.get_page_text()
+            return await session.get_page_text(page_name)
         except Exception as e:
             return f"{e}"
 
     @tool
-    async def get_title() -> str:
+    async def get_title(page_name: Optional[str] = None) -> str:
         """
         Get the title of the current webpage.
 
@@ -303,12 +455,12 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
         """
         await log_chat("Getting page title")
         try:
-            return await session.get_title()
+            return await session.get_title(page_name)
         except Exception as e:
             return f"{e}"
 
     @tool
-    async def get_ui_schema() -> list:
+    async def get_ui_schema(page_name: Optional[str] = None) -> list:
         """
         Extract structured UI elements from the page.
 
@@ -316,43 +468,46 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
         elements such as buttons, links, and input fields.
         Useful for browser agents to understand what actions
         are possible on the page.
-
+        Args: 
+            page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
             A list of UI element dictionaries.
         """
         await log_chat("Getting UI schema")
         try:
-            return await session.get_ui_schema()
+            return await session.get_ui_schema(page_name)
         except Exception as e:
             return f"{e}"
 
     @tool
-    async def get_all_links() -> list:
+    async def get_all_links(page_name: Optional[str] = None) -> list:
         """
         Extract all hyperlinks from the page.
-
+        Arge:
+            page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
             A list of URLs found in anchor tags.
         """
         await log_chat("Getting all links")
         try:
-            return await session.get_all_links()
+            return await session.get_all_links(page_name)
         except Exception as e:
             return f"{e}"
 
     @tool
-    async def get_all_headings() -> list:
+    async def get_all_headings(page_name: Optional[str] = None) -> list:
         """
         Extract all headings from the page.
 
         This includes H1 through H6 elements.
-
+        Args:
+            page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
             A list of heading texts.
         """
         await log_chat("Getting all headings")
         try:
-            return await session.get_all_headings()
+            return await session.get_all_headings(page_name)
         except Exception as e:
             return f"{e}"
 
@@ -371,29 +526,35 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
     #         return f"{e}"
 
     @tool
-    async def submit_form() -> str:
+    async def submit_form(page_name) -> str:
         """
         Submit the current form.
-
+        Args:
+            page_name: Optional name for the page. If not provided, uses the current page.  
         Returns:
             Confirmation message indicating form submission status.
         """
         await log_chat("Submitting form")
         try:
-            return await session.submit_form()
+            return await session.submit_form(page_name)
         except Exception as e:
             return f"{e}"
 
     @tool
-    async def fill_any_form(form_elements: List[Dict[str, str]]) -> str:
+    async def fill_any_form(form_elements: List[Dict[str, str]], page_name) -> str:
         """
-        Fill multiple form fields on the current page.
+        Args:
+        form_elements: List of form elements to fill.
+            Fill multiple form fields on the current page.
 
-        Each element:
-        - selector: CSS selector
-        - value: value to type (optional)
+            Each element:
+            - selector: CSS selector
+            - value: value to type (optional)
 
-        If value is missing or empty, user will be prompted.
+            If value is missing or empty, user will be prompted.
+        page_name: Optional name for the page. If not provided, uses the current page.
+        Returns:
+            Confirmation message indicating form fill status.
         """
 
         results = []
@@ -421,13 +582,13 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
                 # Optional: clear before typing
                 try:
                     await log_chat(f"Clearing {selector}")
-                    await session.clear(selector)
+                    await session.clear(selector, page_name)
                 except:
                     await log_chat(f"Failed to clear {selector}")
                     pass
                 
                 await log_chat(f"Typing {value} into {selector}")
-                await session.type_text(selector, value)
+                await session.type_text(selector, value, page_name)
                 results.append(selector)
 
             except Exception as e:
@@ -475,10 +636,11 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
             return f"{e}"
         
     @tool
-    async def get_all_links_with_text() -> list:
+    async def get_all_links_with_text(page_name: Optional[str] = None) -> list:
         """
         Extract all hyperlinks from the page with their text.
-
+        Args:
+            page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
             A list of dictionaries with text and href.
         """
@@ -1001,6 +1163,18 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
         except Exception as e:
             return str(e)
 
+    @tool
+    async def get_current_date_time() -> str:
+        """
+        Get the current date and time.
+        """
+        await log_chat("Getting current date and time")
+        try:
+            return datetime.datetime.now().strftime("%A, %d %B %Y %H:%M:%S")
+        except Exception as e:
+            return str(e)
+
+
     misc_tools_list = [
         get_user_confirmation,
         get_all_files,
@@ -1014,7 +1188,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
         delete_directory,
         update_memory,
         read_memory,
-        clear_memory
+        clear_memory,
+        get_current_date_time
         
     ]
 
@@ -1033,6 +1208,10 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, file_
         get_all_links_with_text,
         upload_file,
         upload_with_click,
+        list_tabs,
+        list_tabs_detailed,
+        close_tab,
+        switch_tab
     ]
 
     if misc_tools:

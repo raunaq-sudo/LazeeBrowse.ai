@@ -480,13 +480,13 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             )
             
             context = await browser.new_context(permissions=[])
-            page = await context.new_page()
+            # page = await context.new_page()
             
-            page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
-            context.on("page", lambda p: asyncio.create_task(p.close()))
+            # page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
+            # context.on("page", lambda p: asyncio.create_task(p.close()))
             
             await log_wrapper("📄 Browser ready")
-            session = BrowserSession(page)
+            session = BrowserSession(context)
             
             tools = build_tools(
                 session=session,
