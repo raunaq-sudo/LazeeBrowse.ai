@@ -197,6 +197,28 @@ def resolve_user_path(relative_path: str):
 
     return full_path
 
+import sys
+import os
+
+def get_resource_path(relative_path: str) -> str:
+    """
+    Get absolute path to resource (works in dev + PyInstaller)
+    """
+    if hasattr(sys, '_MEIPASS'):
+        # Running from PyInstaller bundle
+        base_path = sys._MEIPASS
+    else:
+        # Running in normal Python environment
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+def load_prompt(filename: str) -> str:
+    path = get_resource_path(f"prompts/{filename}")
+    
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+    
 
 
 
@@ -346,6 +368,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
     Generate agent response with browser automation support.
     Now properly handles connection state.
     """
+    global project_dir
     try:
         # Check if connection is still active
         if safe_ws.is_closed:
@@ -366,8 +389,8 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         
         # Load router prompt
         try:
-            with open("conversational_agent_system_prompt.md", "r") as f:
-                conversational_agent_prompt = f.read()
+            conversational_agent_prompt = load_prompt("conversational_agent_system_prompt.md")
+            await log_chat(f"Conversational agent prompt loaded: {conversational_agent_prompt[:100] if conversational_agent_prompt else 'None'}...", safe_ws)
         except FileNotFoundError:
             conversational_agent_prompt = "You are a helpful assistant that can browse the web when needed."
         
@@ -442,8 +465,8 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         await log_wrapper("📝 Generating system prompt...")
         
         try:
-            with open("system_prompt_generator.md", "r") as f:
-                sys_prompt_gen = f.read()
+            sys_prompt_gen = load_prompt("system_prompt_generator.md")
+            await log_chat(f"System prompt generator loaded: {sys_prompt_gen[:100] if sys_prompt_gen else 'None'}...", safe_ws)
         except FileNotFoundError:
             sys_prompt_gen = "Generate a system prompt for web browsing based on the conversation."
         
@@ -476,7 +499,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                     "--disable-geolocation",
                     "--disable-infobars",
                 ], 
-                downloads_path="files/downloads"
+                downloads_path=resolve_user_path("downloads")
             )
             
             context = await browser.new_context(permissions=[])
@@ -592,6 +615,7 @@ async def health():
 @app.websocket("/ws/{session_id}")
 async def agent_session(websocket: WebSocket, session_id: str):
     await websocket.accept()
+    global project_dir
 
     print(f"[+] Incoming connection: {session_id}")
 
@@ -669,7 +693,6 @@ async def agent_session(websocket: WebSocket, session_id: str):
                         "type": "pong",
                         "timestamp": datetime.now().isoformat(),
                     })
-                    global project_dir
                     if project_dir is not None:
                         await file_tree_data(safe_ws)
                         
@@ -697,7 +720,7 @@ async def agent_session(websocket: WebSocket, session_id: str):
                         break
 
                 elif msg_type=="folderPath":
-                    global project_dir
+                    
                     print(f"[FOLDER PATH] {project_dir}")
                     project_dir = data.get("folder_path", "").strip()
                     print(f"Data : {data}")
