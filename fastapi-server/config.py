@@ -39,10 +39,10 @@ from langchain_deepseek import ChatDeepSeek
 #     api_key = os.getenv("DEEPSEEK_API_KEY")
 # )
 
-async def get_models(api_key):
+async def get_models(api_key, temperature=0.4):
     model =  ChatDeepSeek(
         model="deepseek-chat",
-        temperature=0.4,
+        temperature=temperature,
         max_tokens=None,
         timeout=None,
         max_retries=2,

@@ -23,6 +23,7 @@ import os
 from config import get_models
 
 llm = None
+llm_deterministic = None
 
 project_dir = None
 
@@ -472,13 +473,6 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 only_browser_tools=True
             )
             
-            composite_backend = lambda rt: CompositeBackend(
-                        default=StateBackend(rt),
-                        routes={
-                            "/memories/": StoreBackend(rt),
-                        }
-                    )
-            checkpointer = MemorySaver()
             await log_chat(f"Project path: {project_dir}", safe_ws)
             agent = create_deep_agent(
                 model=llm,
@@ -669,7 +663,9 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     api_key = data.get("api_key", "").strip()
                     try:
                         global llm
-                        llm = await get_models(api_key) 
+                        global llm_deterministic
+                        llm = await get_models(api_key)
+                        llm_deterministic = await get_models(api_key, temperature=0.1)
                     except Exception as e:
                         print(f"[ERROR] {session_id}: {e}")
                         await safe_ws.send({
