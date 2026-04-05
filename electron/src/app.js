@@ -124,6 +124,7 @@ function handleServerMessage(data) {
       break;
     
     case "form_input":
+      setThinking(false);
       setFormInputRequired(true, data.request_id);
       // Only render assistant messages here;
       // user messages are rendered optimistically on send

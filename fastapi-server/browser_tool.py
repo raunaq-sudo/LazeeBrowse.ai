@@ -11,24 +11,24 @@ import sys
 import json
 import datetime
 
-def get_base_path():
-    if getattr(sys, "frozen", False):
-        return sys._MEIPASS
-    return os.getcwd()
+# def get_base_path():
+#     if getattr(sys, "frozen", False):
+#         return sys._MEIPASS
+#     return os.getcwd()
 
-def get_user_memory_path(base_path: str):
-    base = base_path
-    os.makedirs(base, exist_ok=True)
-    return os.path.join(base, "url_memory.json")
+# def get_user_memory_path(base_path: str):
+#     base = base_path
+#     os.makedirs(base, exist_ok=True)
+#     return os.path.join(base, "url_memory.json")
 
-def get_user_files_dir(base_path: str):
-    base = os.path.join(base_path, "files")
-    os.makedirs(base, exist_ok=True)
-    return base
+# def get_user_files_dir(base_path: str):
+#     base = os.path.join(base_path, "files")
+#     os.makedirs(base, exist_ok=True)
+#     return base
 
-def resolve_user_path(base_path, relative_path: str):
-    base = get_user_files_dir(base_path)
-    return os.path.join(base, relative_path.replace("files/", ""))
+# def resolve_user_path(base_path, relative_path: str):
+#     base = get_user_files_dir(base_path)
+#     return os.path.join(base, relative_path.replace("files/", ""))
 
 
 import os
@@ -48,11 +48,12 @@ class BrowserSession:
     # ---------------- TAB MANAGEMENT ---------------- #
 
     async def _on_new_page(self, page):
-        await page.wait_for_load_state()
+        await page.wait_for_load_state("domcontentloaded")
         page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
         name = f"auto_{len(self.pages)+1}"
         self.pages[name] = page
         self.active_page = name
+        self.switch_tab(name)
         print(f"[NEW TAB] {name} -> {page.url}")
 
     async def new_page(self, name: str, url: str):
@@ -63,7 +64,7 @@ class BrowserSession:
 
         page = await self.context.new_page()
         await page.goto(url, timeout=self.max_timeout)
-        await page.wait_for_load_state("networkidle")
+        await page.wait_for_load_state("domcontentloaded")
 
         self.pages[name] = page
         self.active_page = name
@@ -82,7 +83,9 @@ class BrowserSession:
         
         if name is None and self.active_page is not None:
             name = self.active_page
-            
+        
+        self.switch_tab(name)
+        
 
         return self.pages[name]
 
@@ -128,12 +131,40 @@ class BrowserSession:
                 return name
         return None
 
+    async def handle_popups(self, page):
+        # Close modals
+        modals = page.locator("[role='dialog'], .modal")
+
+        count = await modals.count()
+
+        for i in range(count):
+            modal = modals.nth(i)
+
+            if await modal.is_visible():
+                close_btn = modal.locator("button, [aria-label='close']")
+                
+                if await close_btn.count() > 0:
+                    await close_btn.first.click()
+                else:
+                    await page.keyboard.press("Escape")
+
+        # Accept cookies
+        try:
+            btn = page.locator("button:has-text('Accept')")
+            if await btn.count() > 0:
+                await btn.first.click(timeout=1000)
+        except:
+            pass
     # ---------------- ACTIONS ---------------- #
 
     async def open_url(self, url: str, page_name: Optional[str] = None):
         page = await self.get_page(page_name)
+        print("Going to url: ", url)
         await page.goto(url, timeout=self.max_timeout)
-        await page.wait_for_load_state("networkidle")
+        print("Waiting for load state: ", page.url)
+        await page.wait_for_load_state("domcontentloaded")
+        print("Page loaded.")
+        # await self.handle_popups(page)
         return f"[{page_name or self.active_page}] Opened {url}"
 
     async def click(self, selector: str, page_name: Optional[str] = None):
@@ -192,21 +223,153 @@ class BrowserSession:
             .map(h => h.innerText)
         """)
 
+    async def get_visible_modal_schema(self, page_name: Optional[str] = None):
+        
+        """
+        Returns UI schema for all visible modals.
+
+        Output format:
+        [
+            {
+                "modal_index": 0,
+                "elements": [
+                    {
+                        "tag": "input",
+                        "type": "text",
+                        "name": "email",
+                        "placeholder": "Enter email",
+                        "selector": "...",
+                        "visible": True
+                    }
+                ]
+            }
+        ]
+        """
+        page = await self.get_page(page_name)
+        modal_selector = "[role='dialog'], [aria-modal='true'], .modal"
+        modals = page.locator(modal_selector)
+
+        result = []
+        modal_count = await modals.count()
+
+        for i in range(modal_count):
+            modal = modals.nth(i)
+
+            try:
+                if not await modal.is_visible(timeout=500):
+                    continue
+
+                elements = modal.locator(
+                    "input, textarea, select, button, a"
+                )
+
+                el_count = await elements.count()
+                modal_elements = []
+
+                for j in range(el_count):
+                    el = elements.nth(j)
+
+                    try:
+                        if not await el.is_visible(timeout=200):
+                            continue
+
+                        tag = await el.evaluate("el => el.tagName.toLowerCase()")
+
+                        element_data = {
+                            "tag": tag,
+                            "selector": await el.evaluate("""
+                                el => {
+                                    if (el.id) return '#' + el.id;
+                                    if (el.name) return `[name="${el.name}"]`;
+                                    if (el.className) return el.tagName.toLowerCase() + '.' + el.className.split(' ').join('.');
+                                    return el.tagName.toLowerCase();
+                                }
+                            """),
+                            "visible": True
+                        }
+
+                        # Input-specific attributes
+                        if tag == "input":
+                            element_data["type"] = await el.get_attribute("type")
+                            element_data["name"] = await el.get_attribute("name")
+                            element_data["placeholder"] = await el.get_attribute("placeholder")
+
+                        elif tag in ["textarea", "select"]:
+                            element_data["name"] = await el.get_attribute("name")
+
+                        elif tag in ["button", "a"]:
+                            element_data["text"] = (await el.inner_text()).strip()
+
+                        modal_elements.append(element_data)
+
+                    except:
+                        continue
+                
+                result.append({
+                    "modal_index": i,
+                    "elements": modal_elements
+                })
+
+            except:
+                continue
+        print(f"Modal schema : {result}")
+        return result
+
     async def get_ui_schema(self, page_name: Optional[str] = None):
         page = await self.get_page(page_name)
-        return await page.evaluate("""
+
+        ui_schema = await page.evaluate("""
         () => {
+
             function visible(el) {
                 const style = window.getComputedStyle(el);
-                return style.display !== 'none' && style.visibility !== 'hidden';
+                const rect = el.getBoundingClientRect();
+
+                return (
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    parseFloat(style.opacity || "1") > 0 &&
+                    rect.width > 0 &&
+                    rect.height > 0
+                );
             }
 
-            const elements = [];
+            function isDialogOpen(el) {
+                return el.tagName.toLowerCase() !== "dialog" || el.open;
+            }
 
-            document.querySelectorAll("button, a, input, textarea, select").forEach(el => {
-                if (!visible(el)) return;
+            function classifyRegion(el) {
+                const tag = el.tagName.toLowerCase();
+                const cls = (el.className || "").toLowerCase();
 
-                let tag = el.tagName.toLowerCase();
+                if (tag === "dialog") return "dialog";
+                if (cls.includes("drawer") || cls.includes("sidebar")) return "drawer";
+                if (cls.includes("popup")) return "popup";
+                if (cls.includes("overlay")) return "overlay";
+                if (cls.includes("modal")) return "modal";
+                return "region";
+            }
+
+            function classifyNode(el) {
+                const tag = el.tagName.toLowerCase();
+
+                if (["form"].includes(tag)) return "form";
+                if (["section"].includes(tag)) return "section";
+                if (["header", "footer", "nav"].includes(tag)) return tag;
+                if (["ul", "ol"].includes(tag)) return "list";
+                if (["li"].includes(tag)) return "list_item";
+
+                if (tag === "input") return "input";
+                if (tag === "button") return "button";
+                if (tag === "a") return "link";
+                if (tag === "textarea") return "textarea";
+                if (tag === "select") return "select";
+
+                return "container";
+            }
+
+            function extractElementData(el) {
+                const tag = el.tagName.toLowerCase();
                 let type = tag;
                 let text = el.innerText || el.value || "";
 
@@ -217,19 +380,142 @@ class BrowserSession:
                     text = el.placeholder || el.value || "";
                 }
 
-                elements.push({
+                return {
+                    tag,
                     type,
-                    text: text.trim(),
+                    text: (text || "").trim(),
                     placeholder: el.placeholder || null,
                     name: el.name || null,
                     id: el.id || null
+                };
+            }
+
+            function buildTree(root, depth = 0, maxDepth = 5) {
+                if (depth > maxDepth) return null;
+                if (!visible(root)) return null;
+
+                const nodeType = classifyNode(root);
+
+                const node = {
+                    type: nodeType,
+                    meta: extractElementData(root),
+                    children: []
+                };
+
+                for (const child of root.children) {
+                    const childNode = buildTree(child, depth + 1, maxDepth);
+                    if (childNode) {
+                        node.children.push(childNode);
+                    }
+                }
+
+                // prune empty containers
+                if (
+                    node.children.length === 0 &&
+                    !["input", "button", "link", "textarea", "select"].includes(nodeType)
+                ) {
+                    return null;
+                }
+
+                return node;
+            }
+
+            function isOverlayLike(el) {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+
+                return (
+                    style.position === "fixed" &&
+                    parseInt(style.zIndex || "0") > 1000 &&
+                    rect.width > window.innerWidth * 0.3 &&
+                    rect.height > window.innerHeight * 0.2
+                );
+            }
+
+            function isBlocking(el) {
+                const rect = el.getBoundingClientRect();
+                return (
+                    rect.width > window.innerWidth * 0.5 &&
+                    rect.height > window.innerHeight * 0.5
+                );
+            }
+
+            const regions = [];
+            const seen = new Set();
+
+            const regionSelectors = [
+                "dialog",
+                "[role='dialog']",
+                "[aria-modal='true']",
+                ".modal",
+                "[class*='modal']",
+                "[class*='popup']",
+                "[class*='overlay']",
+                "[class*='drawer']",
+                "[class*='sidebar']"
+            ];
+
+            // 🔹 1. Explicit regions
+            regionSelectors.forEach(selector => {
+                document.querySelectorAll(selector).forEach(el => {
+
+                    if (!visible(el)) return;
+                    if (!isDialogOpen(el)) return;
+                    if (seen.has(el)) return;
+
+                    seen.add(el);
+
+                    const tree = buildTree(el);
+
+                    if (tree) {
+                        regions.push({
+                            id: "region_" + regions.length,
+                            type: classifyRegion(el),
+                            isBlocking: isBlocking(el),
+                            tree: tree
+                        });
+                    }
                 });
             });
 
-            return elements;
+            // 🔹 2. Heuristic overlays
+            document.querySelectorAll("div").forEach(el => {
+
+                if (seen.has(el)) return;
+                if (!visible(el)) return;
+                if (!isOverlayLike(el)) return;
+
+                seen.add(el);
+
+                const tree = buildTree(el);
+
+                if (tree) {
+                    regions.push({
+                        id: "region_" + regions.length,
+                        type: "overlay",
+                        isBlocking: true,
+                        tree: tree
+                    });
+                }
+            });
+
+            // 🔹 3. Main page
+            const mainTree = buildTree(document.body);
+
+            if (mainTree) {
+                regions.push({
+                    id: "main",
+                    type: "page",
+                    isBlocking: false,
+                    tree: mainTree
+                });
+            }
+
+            return { regions };
         }
         """)
 
+        return ui_schema
     # ---------------- FILE UPLOAD ---------------- #
 
     async def upload_file(self, selector: str, file_path: str, page_name: Optional[str] = None):
@@ -368,7 +654,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         """
         await log_chat(f"Opening {url}")
         try:
-            return await session.open_url(url, page_name)
+            response = await session.open_url(url, page_name)
+            return await session.get_ui_schema(page_name)
         except Exception as e:
             await log_chat(f"Error opening {url}: {e}")
             return f"{e}"
@@ -384,11 +671,18 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             'text=Login', '#submit', or 'button:has-text("Login")'.
             page_name: Optional name for the page. If not provided, uses the current page.
         Returns:
-            Confirmation message indicating which element was clicked.
+            A json object containing the changes in the UI before and after the click.
+            
+            "page_before_event": Ui elements before the click 
+            "page_after_event": Ui elements after the click 
+            "common_elements": Common elements
         """
         await log_chat(f"Clicking {selector}")
         try:
-            return await session.click(selector, page_name)
+            previous_schema = await session.get_ui_schema(page_name)
+            response =  await session.click(selector, page_name)
+            new_schema = await session.get_ui_schema(page_name)
+            return diff_ui_schemas(previous_schema, new_schema)
         except Exception as e:
             return f"{e}"
 
@@ -410,6 +704,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return await session.type_text(selector, text, page_name)
         except Exception as e:
             return f"{e}"
+    
+
 
     @tool
     async def scroll(amount: int, page_name: Optional[str] = None) -> str:
@@ -456,6 +752,21 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         await log_chat("Getting page title")
         try:
             return await session.get_title(page_name)
+        except Exception as e:
+            return f"{e}"
+
+    @tool
+    async def get_visible_modal_schema(page_name: Optional[str] = None) -> list:
+        """
+        Get the visible modal schema of the current page.
+        Args:
+            page_name: Optional name for the page. If not provided, uses the current page.
+        Returns:
+            A list of modal element dictionaries.
+        """
+        await log_chat("Getting visible modal schema")
+        try:
+            return await session.get_visible_modal_schema(page_name)
         except Exception as e:
             return f"{e}"
 
@@ -532,11 +843,18 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         Args:
             page_name: Optional name for the page. If not provided, uses the current page.  
         Returns:
-            Confirmation message indicating form submission status.
+            A json object containing the changes in the UI before and after the form submission.
+            
+            "page_before_event": Ui elements before the submission
+            "page_after_event": Ui elements after the submission
+            "common_elements": Common elements
         """
         await log_chat("Submitting form")
         try:
-            return await session.submit_form(page_name)
+            previous_schema = await session.get_ui_schema(page_name)
+            response = await session.submit_form(page_name)
+            new_schema = await session.get_ui_schema(page_name)
+            return diff_ui_schemas(previous_schema, new_schema)
         except Exception as e:
             return f"{e}"
 
@@ -653,7 +971,10 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
     # -------------------------------
     # HELPERS (ADD ONCE)
     # -------------------------------
-    def get_user_files_dir(base_path = base_path):
+    def get_user_files_dir():
+        return _get_user_files_dir(base_path)
+
+    def _get_user_files_dir(base_path = base_path):
         base = os.path.join(base_path, "files")
         os.makedirs(base, exist_ok=True)
         return base
@@ -661,9 +982,12 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
 
     def resolve_user_path(relative_path: str):
         base = get_user_files_dir()
-        clean = relative_path.replace("files/", "", 1)
+        print(f"Resolving user path: {relative_path}")
+        print(f"Base: {base}")
+        clean = os.path.normpath(relative_path).lstrip(os.sep)
+        print(f"Clean: {clean}")
         full_path = os.path.join(base, clean)
-
+        print(f"Full path: {full_path}")
         # 🔒 Prevent path traversal
         if not os.path.abspath(full_path).startswith(os.path.abspath(base)):
             raise Exception("Invalid file path (security violation)")
@@ -677,6 +1001,64 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             with open(os.path.join(base, "url_memory.json"), "w") as f:
                 f.write("{}")
         return os.path.join(base, "url_memory.json")
+
+
+    def flatten_ui_schema(schema):
+        flat = []
+
+        # Page elements
+        for el in schema.get("page", []):
+            flat.append({**el, "context": "page"})
+
+        # Modal elements
+        for i, modal in enumerate(schema.get("modals", [])):
+            for el in modal.get("elements", []):
+                flat.append({
+                    **el,
+                    "context": f"modal_{i}"
+                })
+
+        return flat
+
+    def diff_ui_schemas(schema1, schema2):
+        """
+        Compare two UI schema lists and return differences.
+
+        Returns:
+        {
+            "only_in_schema1": [...],
+            "only_in_schema2": [...],
+            "common": [...]
+        }
+        """
+        schema1 = flatten_ui_schema(schema1)
+        schema2 = flatten_ui_schema(schema2)
+        def normalize(el):
+            """Create a stable comparison key"""
+            return (
+                el.get("type"),
+                (el.get("text") or "").strip(),
+                el.get("placeholder"),
+                el.get("name"),
+                el.get("id"),
+            )
+
+        set1 = {normalize(el): el for el in schema1}
+        set2 = {normalize(el): el for el in schema2}
+
+        keys1 = set(set1.keys())
+        keys2 = set(set2.keys())
+
+        only_1_keys = keys1 - keys2
+        only_2_keys = keys2 - keys1
+        common_keys = keys1 & keys2
+
+        return {
+            "page_before_event": [set1[k] for k in only_1_keys],
+            "page_after_event": [set2[k] for k in only_2_keys],
+            "common_elements": [set1[k] for k in common_keys],
+        }
+    
 
     # -------------------------------
     # GET FILE TREE
@@ -812,21 +1194,17 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         """
         await log_chat(f"Deleting file: {filepath}")
 
-        if not filepath.startswith("files/"):
-            return "Invalid filepath"
+        # if not filepath.startswith("files/"):
+        #     return "Invalid filepath"
 
         try:
             full_path = resolve_user_path(filepath)
-
+            await log_chat(f"Full path: {full_path}")
             if not os.path.exists(full_path):
                 return f"File not found: {filepath}"
 
             if os.path.isdir(full_path):
                 return "Path is a directory, not a file"
-
-            confirm = await get_user_confirmation(f"Delete {filepath}?")
-            if "true" not in confirm.lower():
-                return "Cancelled by user"
 
             os.remove(full_path)
 
@@ -1201,6 +1579,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         get_page_text,
         get_title,
         get_ui_schema,
+        get_visible_modal_schema,
         get_all_links,
         get_all_headings,
         submit_form,
@@ -1214,9 +1593,19 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         switch_tab
     ]
 
+    misc_tools_imp = [
+        get_user_confirmation,
+        get_current_date_time,
+        move_file,
+        delete_file,
+        delete_directory,
+        get_user_input_from_options
+    ]
+
+
     if misc_tools:
         return misc_tools_list
     elif only_browser_tools:
-        return browser_tools
+        return browser_tools + misc_tools_imp
     else:
         return browser_tools + misc_tools_list

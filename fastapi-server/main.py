@@ -6,6 +6,8 @@ from datetime import datetime
 import uuid
 import asyncio
 import time
+from deepagents.backends import FilesystemBackend, CompositeBackend, StateBackend, StoreBackend
+from langgraph.checkpoint.memory import MemorySaver
 
 from playwright.async_api import async_playwright
 
@@ -23,6 +25,8 @@ from config import get_models
 llm = None
 
 project_dir = None
+
+agent_interrupted = False
 
 app = FastAPI(title="AI Agent WebSocket Server")
 
@@ -161,6 +165,10 @@ async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
         try:
             user_response = await asyncio.wait_for(future, timeout=300.0)
             await log_chat(f"User response on request: {user_response}", safe_ws)
+            await safe_ws.send({
+                "type": "agent_thinking",
+                "timestamp": datetime.now().isoformat(),
+            })
             return user_response
         except asyncio.TimeoutError:
             return "User did not respond in time"
@@ -357,6 +365,8 @@ def clean_up_response(response):
         text = extract_text(response.content)
         if text:
             return text
+    
+
 
     # -------------------------------
     # FINAL FALLBACK (SAFE)
@@ -409,10 +419,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         
         
         
-        await safe_ws.send({
-            "type": "agent_thinking",
-            "timestamp": datetime.now().isoformat(),
-        })
+        
         # -------------------------------
         # BROWSING FLOW
         # -------------------------------
@@ -464,26 +471,30 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 base_path=project_dir,
                 only_browser_tools=True
             )
-            from deepagents.backends import FilesystemBackend, CompositeBackend, StateBackend, StoreBackend
-
+            
             composite_backend = lambda rt: CompositeBackend(
                         default=StateBackend(rt),
                         routes={
                             "/memories/": StoreBackend(rt),
                         }
                     )
-
+            checkpointer = MemorySaver()
             await log_chat(f"Project path: {project_dir}", safe_ws)
             agent = create_deep_agent(
                 model=llm,
                 tools=tools,
                 backend = FilesystemBackend(root_dir=os.path.join(project_dir,"files"), virtual_mode=True),
-                system_prompt=load_prompt("deep_agent.md")
+                system_prompt=load_prompt("deep_agent.md"),
+                # interrupt_on={
+                #     "delete_file":True,
+                #     "delete_directory":True
+                # },
+                # checkpointer=checkpointer
                 
             )
             await file_tree_data(safe_ws)
             await log_wrapper("🤖 Agent created. Running browser automation...")
-            
+            config = {"configurable": {"thread_id": str(uuid.uuid4())}}
             try:
                 response = await agent.ainvoke(
                     {
@@ -491,7 +502,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                             {"role": "user", "content": user_message}
                         ] + chat_manager.get_chat_history(session_id)
                     },
-                    config={"recursion_limit": 500}
+                    config={"recursion_limit": 500, "configurable": {"thread_id": str(uuid.uuid4())}}
                 )
             except Exception as e:
                 await log_wrapper(f"⚠️ Agent error: {str(e)[:200]}")
