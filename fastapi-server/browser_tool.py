@@ -904,12 +904,19 @@ class BrowserSession:
             const style = window.getComputedStyle(el);
             const rect = el.getBoundingClientRect();
 
+            const inViewport =
+                rect.bottom > 0 &&
+                rect.right > 0 &&
+                rect.top < window.innerHeight &&
+                rect.left < window.innerWidth;
+
             return (
                 style.display !== 'none' &&
                 style.visibility !== 'hidden' &&
                 parseFloat(style.opacity || "1") > 0 &&
                 rect.width > 0 &&
-                rect.height > 0
+                rect.height > 0 &&
+                inViewport
             );
         }
 
@@ -1192,14 +1199,7 @@ class BrowserSession:
         return { regions };
     }
         """)
-        filtered_ui = self.filter_ui_tree_by_confidence(ui_schema, 2)
-        print(filtered_ui)
-        if filtered_ui is None:
-            filtered_ui_links = await self.get_all_links_with_metadata(page_name)
-            filtered_ui_inputs = await self.get_all_inputs_with_placeholder(page_name)
-            filtered_ui_buttons = await self.get_all_buttons_with_metadata(page_name)
-            filtered_ui = {"regions": [{"id": "main", "type": "page", "isBlocking": False, "tree": {"children": filtered_ui_links + filtered_ui_inputs + filtered_ui_buttons}}]}
-        print(filtered_ui)
+
         return ui_schema
     # ---------------- FILE UPLOAD ---------------- #
 

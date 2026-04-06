@@ -475,7 +475,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             
             await log_chat(f"Project path: {project_dir}", safe_ws)
             agent = create_deep_agent(
-                model=llm,
+                model=llm_deterministic,
                 tools=tools,
                 backend = FilesystemBackend(root_dir=os.path.join(project_dir,"files"), virtual_mode=True),
                 system_prompt=load_prompt("deep_agent.md"),
