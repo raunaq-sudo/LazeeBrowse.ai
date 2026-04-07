@@ -1,0 +1,82 @@
+[
+  {
+    "selector": "#login-btn",
+    "type": "button"
+  },
+  {
+    "selector": "#email",
+    "type": "input"
+  },
+  {
+    "selector": ".cart-btn",
+    "type": "button"
+  },
+  {
+    "selector": "#search",
+    "type": "input"
+  },
+  {
+    "selector": "#checkout",
+    "type": "button"
+  },
+  {
+    "selector": "#login-btn",
+    "type": "button"
+  },
+  {
+    "selector": "#email",
+    "type": "input"
+  },
+  {
+    "selector": ".cart-btn",
+    "type": "button"
+  },
+  {
+    "selector": "#search",
+    "type": "input"
+  },
+  {
+    "selector": "#checkout",
+    "type": "button"
+  },
+  {
+    "selector": "#login-btn",
+    "type": "button"
+  },
+  {
+    "selector": "#email",
+    "type": "input"
+  },
+  {
+    "selector": ".cart-btn",
+    "type": "button"
+  },
+  {
+    "selector": "#search",
+    "type": "input"
+  },
+  {
+    "selector": "#checkout",
+    "type": "button"
+  },
+  {
+    "selector": "#login-btn",
+    "type": "button"
+  },
+  {
+    "selector": "#email",
+    "type": "input"
+  },
+  {
+    "selector": ".cart-btn",
+    "type": "button"
+  },
+  {
+    "selector": "#search",
+    "type": "input"
+  },
+  {
+    "selector": "#checkout",
+    "type": "button"
+  }
+]

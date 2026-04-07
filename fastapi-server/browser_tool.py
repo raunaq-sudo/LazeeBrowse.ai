@@ -10,7 +10,7 @@ import pypandoc
 import sys
 import json
 import datetime
-
+from embeddings_handler import add_content, search_all, remove_document, add_semantic, clear_storage, search_semantic, search_content
 # def get_base_path():
 #     if getattr(sys, "frozen", False):
 #         return sys._MEIPASS
@@ -29,17 +29,31 @@ import datetime
 # def resolve_user_path(base_path, relative_path: str):
 #     base = get_user_files_dir(base_path)
 #     return os.path.join(base, relative_path.replace("files/", ""))
+import difflib
 
+def get_delta(old_text, new_text):
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+
+    diff = difflib.unified_diff(old_lines, new_lines)
+
+    added = []
+    for line in diff:
+        if line.startswith("+") and not line.startswith("+++"):
+            added.append(line[1:])
+
+    return "\n".join(added)
 
 import os
 from typing import Dict, Optional
 
+temp_vectorstore = None
 
 class BrowserSession:
     def __init__(self, context):
         self.context = context
         self.pages: Dict[str, any] = {}
-        self.max_timeout = 2000
+        self.max_timeout = 6000
         self.active_page: Optional[str] = None
 
         # Auto-detect new tabs
@@ -164,14 +178,34 @@ class BrowserSession:
         print("Waiting for load state: ", page.url)
         await page.wait_for_load_state("domcontentloaded")
         print("Page loaded.")
+        ### carry out embedding and load in to temp_vectorstore.
+        raw_html = await page.content()
+        # remove_document(page_name)
+        # get all text
+        all_inner_text = await page.evaluate("document.body.innerText")
+        datetime_str = "last updated : " + datetime.datetime.now().strftime("%Y-%m%d %H:%M:%S")
+        print("Adding to vectorestore.")
+        if page_name is not None:
+            clear_storage(page_name)
+            add_semantic(page_name, url, datetime_str, str(raw_html))
+            add_content(page_name, page.url, datetime_str, str(all_inner_text))
         # await self.handle_popups(page)
+
         return f"[{page_name or self.active_page}] Opened {url}"
 
     async def click(self, selector: str, page_name: Optional[str] = None):
         page = await self.get_page(page_name)
+        # remove_document(page_name)
         await page.click(selector, timeout=self.max_timeout)
-        return f"[CLICK] {selector}"
+        datetime_str = "last updated : " + datetime.datetime.now().strftime("%Y-%m%d %H:%M:%S")
+        all_inner_text = await page.evaluate("document.body.innerText")
+        if page_name is not None:
+            clear_storage(page_name)
+            add_semantic(page_name, page.url, datetime_str, str(await page.content()))
+            add_content(page_name, page.url, datetime_str, str(all_inner_text))
 
+        return f"[CLICK] {selector}"
+    
     async def type_text(self, selector: str, text: str, page_name: Optional[str] = None):
         page = await self.get_page(page_name)
         await page.fill(selector, "")
@@ -180,7 +214,14 @@ class BrowserSession:
 
     async def scroll(self, amount: int = 1000, page_name: Optional[str] = None):
         page = await self.get_page(page_name)
+        content = await page.content()
         await page.mouse.wheel(0, amount)
+        new_content = await page.content()
+        if new_content != content:
+            # remove_document(page_name)
+            datetime_str = "last updated : " + datetime.datetime.now().strftime("%Y-%m%d %H:%M:%S")
+            add_semantic(page_name, page.url, datetime_str, str(new_content))
+            
         return f"[SCROLL] {amount}px"
 
     async def clear(self, selector: str, page_name: Optional[str] = None):
@@ -224,7 +265,14 @@ class BrowserSession:
 
     async def submit_form(self, page_name: Optional[str] = None):
         page = await self.get_page(page_name)
+        # remove_document(page_name)
         await page.keyboard.press("Enter")
+        datetime_str = "last updated : " + datetime.datetime.now().strftime("%Y-%m%d %H:%M:%S")
+        all_inner_text = await page.evaluate("document.body.innerText")
+        if page_name is not None:
+            add_semantic(page_name, page.url, datetime_str, str(await page.content()))
+            add_content(page_name, page.url, datetime_str, str(all_inner_text))
+
         return "[FORM SUBMITTED]"
 
     # ---------------- EXTRACTION ---------------- #
@@ -1477,6 +1525,58 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return f"{e}"
 
     @tool
+    async def query_page(query: str, page_name: str = None, semantic: bool = False, content: bool = False) -> str:
+        """
+        Query the page for a specific element.
+        Parameters:
+            semantic: bool -- pass True if query is to be done on Raw HTML
+            content: bool -- pass True if query is to be done on InnerHtml
+        
+        Response:
+            Hits on the vectorstore
+        """
+
+        await log_chat(f"Querying page for: {query} | page: {page_name}")
+        if page_name is None:
+            return "Please provide a page name"
+        
+        if page_name not in [tab["name"] for tab in await session.list_tabs_detailed()]:
+            return f"Page {page_name} not found. Available pages: {await session.list_tabs_detailed()}"
+
+        try:
+            # 🔥 Better semantic combination
+            if page_name:
+                combined_query = f"{query} in {page_name}"
+            else:
+                combined_query = query
+            if semantic and content:
+                print("Both Called.")
+                results = search_all(combined_query, page_name)
+            if semantic and not content:
+                print("Only Semantic Called.")
+                results = search_semantic(combined_query, page_name)
+            if not semantic and content:
+                print("Only Content Called.")
+                results = search_content(combined_query, page_name)
+
+            if not semantic and not content:
+                print("None Called.")
+                return "Please pass either semantic or content as True. Semantic to be used for Raw HTML and content for InnerHtml"
+            # print(results)
+            # ✅ Format output properly
+            if not results:
+                return "No results found. "
+
+            
+            print(results)
+            return results
+
+        except Exception as e:
+            print("Error " + str(e))
+            return f"Error: {str(e)}"
+
+
+    @tool
     async def get_all_links(page_name: Optional[str] = None) -> list:
         """
         Extract all hyperlinks from the page.
@@ -2264,15 +2364,16 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         click,
         type_text,
         scroll,
-        get_page_text,
-        get_title,
-        get_ui_schema,
-        get_visible_modal_schema,
-        get_all_links,
-        get_all_headings,
+        query_page,
+        # get_page_text,
+        # get_title,
+        # get_ui_schema,
+        # get_visible_modal_schema,
+        # get_all_links,
+        # get_all_headings,
         submit_form,
         fill_any_form,
-        get_all_links_with_text,
+        # get_all_links_with_text,
         upload_file,
         upload_with_click,
         list_tabs,
