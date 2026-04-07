@@ -4,3 +4,5 @@ fastapi-server/.env
 
 fastapi-server/files
 fastapi-server/memory
+fastapi-server/embeddings
+fastapi-server/models
