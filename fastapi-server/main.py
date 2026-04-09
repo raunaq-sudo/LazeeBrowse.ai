@@ -304,79 +304,194 @@ async def file_tree_data(safe_ws: SafeWebSocket):
 
         return {"error": str(e)}
 
+
+def sanitize_tool_call(call):
+    """
+    Normalize tool call safely without losing args.
+    """
+
+    import json
+
+    name = None
+    args = {}
+
+    # -------------------------------
+    # Extract name
+    # -------------------------------
+    if isinstance(call, dict):
+        name = call.get("name")
+
+        # Try multiple keys
+        raw_args = (
+            call.get("args")
+            or call.get("arguments")
+            or call.get("input")
+        )
+
+    else:
+        name = getattr(call, "name", None)
+        raw_args = (
+            getattr(call, "args", None)
+            or getattr(call, "arguments", None)
+        )
+
+    # -------------------------------
+    # Parse args SAFELY
+    # -------------------------------
+    if isinstance(raw_args, dict):
+        args = raw_args  # ✅ already good
+
+    elif isinstance(raw_args, str):
+        try:
+            args = json.loads(raw_args)
+        except Exception:
+            # ⚠️ KEEP RAW STRING (don't drop!)
+            args = {"raw": raw_args}
+
+    else:
+        args = {}
+
+    return {
+        "name": name,
+        "args": args
+    }
+
 def clean_up_response(response):
+    """
+    Extract final text and tool calls from agent/LLM response.
+
+    Returns:
+        {
+            "text": str,
+            "tool_calls": list
+        }
+    """
+
     def extract_text(content):
-        # Case 1: plain string
         if isinstance(content, str):
             return content
 
-        # Case 2: list of content blocks
         if isinstance(content, list):
             for item in reversed(content):
-                if isinstance(item, dict) and "text" in item:
-                    return item["text"]
-                if "structured_response" in content and content.get("structured_response") is not None:
-                    return content["structured_response"]
+                if isinstance(item, dict):
+                    if item.get("text"):
+                        return item["text"]
+                    if item.get("structured_response"):
+                        return item["structured_response"]
+            return None
 
-            return str(content)
-
-        # Case 3: dict with text
         if isinstance(content, dict):
-            if "text" in content:
-                return content["text"]
-
-            if "structured_response" in content and content.get("structured_response") is not None:
-                return content["structured_response"]
-
-            return str(content)
+            return content.get("text") or content.get("structured_response")
 
         return None
 
-    # -------------------------------
-    # Case 1: LangChain agent structured response
-    # -------------------------------
-    if isinstance(response, dict) and "structured_response" in response:
-        return response["structured_response"]
+    def extract_tool_calls(obj):
+        calls = []
 
+        # standard tool calls
+        if hasattr(obj, "tool_calls") and obj.tool_calls:
+            # calls.extend(obj.tool_calls)
+            for c in obj.tool_calls:
+                calls.append(sanitize_tool_call(c))
+
+        # invalid tool calls (CRITICAL for your case)
+        if hasattr(obj, "invalid_tool_calls") and obj.invalid_tool_calls:
+            # calls.extend(obj.invalid_tool_calls)
+            for c in obj.tool_calls:
+                calls.append(sanitize_tool_call(c))
+
+        # dict-based
+        if isinstance(obj, dict):
+            if isinstance(obj.get("tool_calls"), list):
+                # calls.extend(obj["tool_calls"])
+                for c in obj.tool_calls:
+                    calls.append(sanitize_tool_call(c))
+            if isinstance(obj.get("invalid_tool_calls"), list):
+                # calls.extend(obj["invalid_tool_calls"])
+                for c in obj.tool_calls:
+                    calls.append(sanitize_tool_call(c))
+
+        # additional kwargs (DeepSeek / OpenAI style)
+        if hasattr(obj, "additional_kwargs") and isinstance(obj.additional_kwargs, dict):
+            tc = obj.additional_kwargs.get("tool_calls")
+            if isinstance(tc, list):
+                # calls.extend(tc)
+                for c in obj.tool_calls:
+                    calls.append(sanitize_tool_call(c))
+
+        return calls
 
     # -------------------------------
-    # Case 1: LangChain agent response
+    # 1. structured_response
     # -------------------------------
+    if isinstance(response, dict) and response.get("structured_response"):
+        return {
+            "text": response["structured_response"],
+            "tool_calls": []
+        }
 
-    if isinstance(response, dict) and "messages" in response:
-        for msg in reversed(response["messages"]):
+    # -------------------------------
+    # 2. messages (MAIN CASE)
+    # -------------------------------
+    if isinstance(response, dict) and isinstance(response.get("messages"), list):
+        messages = response["messages"]
+
+        for msg in reversed(messages):
             content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+
             text = extract_text(content)
+            tool_calls = extract_tool_calls(msg)
+
+            # priority: tool calls
+            if tool_calls:
+                return {
+                    "text": text or "",
+                    "tool_calls": tool_calls
+                }
+
+            # fallback: text
             if text:
-                return text
+                return {
+                    "text": text,
+                    "tool_calls": []
+                }
 
     # -------------------------------
-    # Case 2: direct dict response
+    # 3. direct dict
     # -------------------------------
     if isinstance(response, dict):
-        content = response.get("content")
-        text = extract_text(content)
-        if text:
-            return text
+        text = extract_text(response.get("content"))
+        tool_calls = extract_tool_calls(response)
+
+        if text or tool_calls:
+            return {
+                "text": text or "",
+                "tool_calls": tool_calls
+            }
 
     # -------------------------------
-    # Case 3: AIMessage or similar
+    # 4. object (AIMessage)
     # -------------------------------
     if hasattr(response, "content"):
         text = extract_text(response.content)
-        if text:
-            return text
-    
+        tool_calls = extract_tool_calls(response)
 
+        if text or tool_calls:
+            return {
+                "text": text or "",
+                "tool_calls": tool_calls
+            }
 
     # -------------------------------
-    # FINAL FALLBACK (SAFE)
+    # FINAL FALLBACK
     # -------------------------------
-    return f"No readable response generated. {str(response).replace('`', '')}"
+    return {
+        "text": f"No readable response generated. {str(response).replace('`', '')}",
+        "tool_calls": []
+    }
 
-# -------------------------------
-# AGENT RESPONSE GENERATION
-# -------------------------------
+
+
 async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket):
     """
     Generate agent response with browser automation support.
@@ -475,15 +590,16 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             
             await log_chat(f"Project path: {project_dir}", safe_ws)
             agent = create_deep_agent(
-                model=llm_deterministic,
+                model=llm,
                 tools=tools,
-                backend = FilesystemBackend(root_dir=os.path.join(project_dir,"files"), virtual_mode=True),
+                # backend = FilesystemBackend(root_dir=os.path.join(project_dir,"files"), virtual_mode=True),
                 system_prompt=load_prompt("deep_agent.md"),
                 # interrupt_on={
                 #     "delete_file":True,
                 #     "delete_directory":True
                 # },
                 # checkpointer=checkpointer
+                
                 
             )
             await file_tree_data(safe_ws)
@@ -493,7 +609,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 response = await agent.ainvoke(
                     {
                         "messages": [
-                            {"role": "user", "content": user_message}
+                            # {"role": "user", "content": user_message}
                         ] + chat_manager.get_chat_history(session_id)
                     },
                     config={"recursion_limit": 500, "configurable": {"thread_id": str(uuid.uuid4())}}
@@ -505,7 +621,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                     response = await agent.ainvoke(
                         {
                             "messages": [
-                                {"role": "user", "content": user_message}
+                                # {"role": "user", "content": user_message}
                             ] + chat_manager.get_chat_history(session_id) + 
                             [{"role": "system", "content": f"""
                                 You are running again. Please continue from where you left last time. 
@@ -523,22 +639,25 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         
         # Process final response
         final_response = clean_up_response(response)
+        print(response)
         await log_wrapper("✨ Final response generated")
         
         # Add final response to history
         chat_manager.update_chat_history({
             "role": "assistant", 
-            "content": final_response
+            "content": final_response['text'],
+            "tool_calls": final_response['tool_calls']
         }, session_id)
         chat_history = chat_manager.get_chat_history(session_id)
-        
+        print(f"Final Response: {final_response['text']}")
+        print(f"Tool Calls: {final_response['tool_calls']}")
         # Send final response
         if not safe_ws.is_closed:
             await safe_ws.send({
                 "type": "message",
                 "role": "assistant",
                 "id": str(uuid.uuid4()),
-                "content": final_response,
+                "content": final_response['text'],
                 "timestamp": datetime.now().isoformat(),
             })
         await file_tree_data(safe_ws)

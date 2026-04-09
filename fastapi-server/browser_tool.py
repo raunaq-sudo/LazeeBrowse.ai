@@ -9,6 +9,7 @@ from typing import List, Dict
 import pypandoc
 import sys
 import json
+from rich import print
 import datetime
 
 # def get_base_path():
@@ -39,7 +40,7 @@ class BrowserSession:
     def __init__(self, context):
         self.context = context
         self.pages: Dict[str, any] = {}
-        self.max_timeout = 2000
+        self.max_timeout = 10000
         self.active_page: Optional[str] = None
 
         # Auto-detect new tabs
@@ -49,6 +50,7 @@ class BrowserSession:
 
     async def _on_new_page(self, page):
         await page.wait_for_load_state("domcontentloaded")
+        await page.wait_for_timeout(1000)
         page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
         name = f"auto_{len(self.pages)+1}"
         self.pages[name] = page
@@ -65,6 +67,7 @@ class BrowserSession:
         page = await self.context.new_page()
         await page.goto(url, timeout=self.max_timeout)
         await page.wait_for_load_state("domcontentloaded")
+        await page.wait_for_timeout(1000)
 
         self.pages[name] = page
         self.active_page = name
@@ -163,6 +166,7 @@ class BrowserSession:
         await page.goto(url, timeout=self.max_timeout)
         print("Waiting for load state: ", page.url)
         await page.wait_for_load_state("domcontentloaded")
+        await page.wait_for_timeout(1000)
         print("Page loaded.")
         # await self.handle_popups(page)
         return f"[{page_name or self.active_page}] Opened {url}"
@@ -274,6 +278,7 @@ class BrowserSession:
         # --- Stability wait ---
         try:
             await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(1000)
             await page.wait_for_timeout(500)
         except:
             pass
@@ -469,6 +474,7 @@ class BrowserSession:
         page = await self.get_page(page_name)
         try:
             await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(1000)
             await page.wait_for_timeout(500)
         except:
             pass
@@ -595,6 +601,7 @@ class BrowserSession:
 
         try:
             await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(1000)
             await page.wait_for_timeout(500)
         except:
             pass
@@ -734,6 +741,7 @@ class BrowserSession:
 
         try:
             await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(1000)
             await page.wait_for_timeout(500)
         except:
             pass
@@ -884,23 +892,24 @@ class BrowserSession:
 
 
 
-    async def get_ui_schema(self, page_name: Optional[str] = None):
+    async def get_ui_schema(self, page_name: Optional[str] = None, mode: str = "visible"):
         page = await self.get_page(page_name)
 
-        # Optional stability wait (important)
         try:
-            await page.wait_for_load_state("domcontentloaded")
-            await page.wait_for_timeout(500)
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(2000)
         except:
             pass
 
-        ui_schema = await page.evaluate("""
-    () => {
+        ui_schema = await page.evaluate(f"""
+    () => {{
+
+        const MODE = "{mode}";
 
         // -------------------------------
-        // Visibility & usability
+        // Visibility
         // -------------------------------
-        function isVisible(el) {
+        function isVisible(el) {{
             const style = window.getComputedStyle(el);
             const rect = el.getBoundingClientRect();
 
@@ -918,93 +927,134 @@ class BrowserSession:
                 rect.height > 0 &&
                 inViewport
             );
-        }
+        }}
 
-        function isUsable(el) {
-          //  const tag = el.tagName.toLowerCase();
-          //  if (tag === "dialog" && !el.open) return false;
-          //  return isVisible(el);
-            return true;
-        }
+        function isInteractiveHidden(el) {{
+            const cls = (el.className || "").toLowerCase();
+            return (
+                cls.includes("modal") ||
+                cls.includes("popup") ||
+                cls.includes("dropdown") ||
+                cls.includes("drawer") ||
+                el.getAttribute("aria-hidden") === "false"
+            );
+        }}
+
+        function isUsable(el) {{
+            if (MODE === "full") return true;
+
+            if (MODE === "visible") {{
+                return isVisible(el);
+            }}
+
+            if (MODE === "interactive") {{
+                return isVisible(el) || isInteractiveHidden(el);
+            }}
+
+            return false;
+        }}
 
         // -------------------------------
-        // Selector generation
+        // Selector
         // -------------------------------
-        function getSelector(el) {
+        function getSelector(el) {{
             if (el.id) return "#" + el.id;
 
             if (el.getAttribute("data-testid"))
-                return `[data-testid="${el.getAttribute("data-testid")}"]`;
+                return `[data-testid="${{el.getAttribute("data-testid")}}"]`;
 
             if (el.name)
-                return `[name="${el.name}"]`;
+                return `[name="${{el.name}}"]`;
 
-            if (el.className && typeof el.className === "string") {
+            if (el.className && typeof el.className === "string") {{
                 const cls = el.className.split(" ").filter(Boolean).slice(0, 2).join(".");
                 if (cls) return el.tagName.toLowerCase() + "." + cls;
-            }
+            }}
 
             return el.tagName.toLowerCase();
-        }
+        }}
 
         // -------------------------------
-        // Confidence scoring
+        // Fingerprint (self-healing)
         // -------------------------------
-        function confidence(el) {
+        function getFingerprint(el) {{
+            const tag = el.tagName.toLowerCase();
+            const text = (el.innerText || el.placeholder || "").trim().slice(0, 50);
+
+            const parent = el.parentElement;
+            const parentTag = parent ? parent.tagName.toLowerCase() : "";
+
+            const rect = el.getBoundingClientRect();
+
+            return btoa(
+                tag + "|" +
+                text + "|" +
+                parentTag + "|" +
+                Math.round(rect.x / 50) + "," + Math.round(rect.y / 50)
+            );
+        }}
+
+        // -------------------------------
+        // Confidence
+        // -------------------------------
+        function confidence(el) {{
             let score = 0;
             if (el.id) score += 3;
             if (el.name) score += 2;
             if (el.innerText) score += 1;
             if (el.getAttribute("data-testid")) score += 3;
             return score;
-        }
+        }}
 
         // -------------------------------
         // Action classification
         // -------------------------------
-        function classifyAction(text) {
+        function classifyAction(text) {{
             const t = (text || "").toLowerCase();
 
             if (t.includes("login") || t.includes("sign in")) return "submit_login";
             if (t.includes("search")) return "search";
             if (t.includes("add to cart")) return "add_to_cart";
-            if (t.includes("next")) return "next_step";
+            if (t.includes("next") || t.includes("continue")) return "next_step";
             if (t.includes("accept")) return "accept";
             if (t.includes("submit")) return "submit";
 
             return null;
-        }
+        }}
 
         // -------------------------------
-        // Layout info
+        // Layout
         // -------------------------------
-        function getLayout(el) {
+        function getLayout(el) {{
             const rect = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
 
-            return {
+            return {{
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
                 height: rect.height,
                 zIndex: parseInt(style.zIndex || "0")
-            };
-        }
+            }};
+        }}
 
         // -------------------------------
-        // State info
+        // State
         // -------------------------------
-        function getState(el) {
-            return {
+        function getState(el) {{
+            return {{
                 enabled: !el.disabled,
-                clickable: el.tagName === "BUTTON" || el.onclick !== null
-            };
-        }
+                clickable:
+                    el.tagName === "BUTTON" ||
+                    el.tagName === "A" ||
+                    el.onclick !== null
+            }};
+        }}
 
         // -------------------------------
         // Node classification
         // -------------------------------
-        function classifyNode(el) {
+        function classifyNode(el) {{
             const tag = el.tagName.toLowerCase();
 
             if (tag === "form") return "form";
@@ -1019,20 +1069,20 @@ class BrowserSession:
             if (tag === "li") return "list_item";
 
             return "container";
-        }
+        }}
 
         // -------------------------------
-        // Extract element meta
+        // Extract meta
         // -------------------------------
-        function extractMeta(el) {
+        function extractMeta(el) {{
             const tag = el.tagName.toLowerCase();
             let text = el.innerText || el.value || "";
 
-            if (tag === "input") {
+            if (tag === "input") {{
                 text = el.placeholder || el.value || "";
-            }
+            }}
 
-            return {
+            return {{
                 tag,
                 type: tag === "a" ? "link" : tag,
                 text: (text || "").trim(),
@@ -1040,62 +1090,63 @@ class BrowserSession:
                 name: el.name || null,
                 id: el.id || null,
                 selector: getSelector(el),
+                fingerprint: getFingerprint(el),
                 confidence: confidence(el),
                 action: classifyAction(text),
                 state: getState(el),
                 layout: getLayout(el)
-            };
-        }
+            }};
+        }}
 
         // -------------------------------
-        // Build tree recursively
+        // Build tree
         // -------------------------------
-        function buildTree(root, depth = 0, maxDepth = 5) {
+        function buildTree(root, depth = 0, maxDepth = 5) {{
             if (depth > maxDepth) return null;
             if (!isUsable(root)) return null;
 
             const nodeType = classifyNode(root);
 
-            const node = {
+            const node = {{
                 type: nodeType,
                 meta: extractMeta(root),
                 children: []
-            };
+            }};
 
-            for (const child of root.children) {
+            for (const child of root.children) {{
                 const childNode = buildTree(child, depth + 1, maxDepth);
                 if (childNode) node.children.push(childNode);
-            }
+            }}
 
-            // Form relationship detection
-            if (nodeType === "form") {
-                node.relationship = {
+            // form relationships
+            if (nodeType === "form") {{
+                node.relationship = {{
                     type: "form",
                     inputs: [],
                     submit: null
-                };
+                }};
 
-                node.children.forEach(c => {
+                node.children.forEach(c => {{
                     if (c.type === "input") node.relationship.inputs.push(c.meta);
                     if (c.type === "button") node.relationship.submit = c.meta;
-                });
-            }
+                }});
+            }}
 
-            // prune empty containers
+            // prune useless containers
             if (
                 node.children.length === 0 &&
                 !["input", "button", "link", "textarea", "select"].includes(nodeType)
-            ) {
+            ) {{
                 return null;
-            }
+            }}
 
             return node;
-        }
+        }}
 
         // -------------------------------
         // Region detection
         // -------------------------------
-        function classifyRegion(el) {
+        function classifyRegion(el) {{
             const tag = el.tagName.toLowerCase();
             const cls = (el.className || "").toLowerCase();
 
@@ -1106,17 +1157,17 @@ class BrowserSession:
             if (cls.includes("modal")) return "modal";
 
             return "region";
-        }
+        }}
 
-        function isBlocking(el) {
+        function isBlocking(el) {{
             const rect = el.getBoundingClientRect();
             return (
                 rect.width > window.innerWidth * 0.5 &&
                 rect.height > window.innerHeight * 0.5
             );
-        }
+        }}
 
-        function isOverlayLike(el) {
+        function isOverlayLike(el) {{
             const style = window.getComputedStyle(el);
             const rect = el.getBoundingClientRect();
 
@@ -1126,7 +1177,7 @@ class BrowserSession:
                 rect.width > window.innerWidth * 0.3 &&
                 rect.height > window.innerHeight * 0.2
             );
-        }
+        }}
 
         const regions = [];
         const seen = new Set();
@@ -1143,10 +1194,9 @@ class BrowserSession:
             "[class*='sidebar']"
         ];
 
-        // Explicit regions
-        regionSelectors.forEach(selector => {
-            document.querySelectorAll(selector).forEach(el => {
-
+        // explicit regions
+        regionSelectors.forEach(selector => {{
+            document.querySelectorAll(selector).forEach(el => {{
                 if (!isUsable(el)) return;
                 if (seen.has(el)) return;
 
@@ -1155,18 +1205,17 @@ class BrowserSession:
                 const tree = buildTree(el);
                 if (!tree) return;
 
-                regions.push({
+                regions.push({{
                     id: "region_" + regions.length,
                     type: classifyRegion(el),
                     isBlocking: isBlocking(el),
                     tree
-                });
-            });
-        });
+                }});
+            }});
+        }});
 
-        // Heuristic overlays
-        document.querySelectorAll("div").forEach(el => {
-
+        // overlay heuristics
+        document.querySelectorAll("div").forEach(el => {{
             if (seen.has(el)) return;
             if (!isUsable(el)) return;
             if (!isOverlayLike(el)) return;
@@ -1176,30 +1225,31 @@ class BrowserSession:
             const tree = buildTree(el);
             if (!tree) return;
 
-            regions.push({
+            regions.push({{
                 id: "region_" + regions.length,
                 type: "overlay",
                 isBlocking: true,
                 tree
-            });
-        });
+            }});
+        }});
 
-        // Main page
+        // main page
         const mainTree = buildTree(document.body);
 
-        if (mainTree) {
-            regions.push({
+        if (mainTree) {{
+            regions.push({{
                 id: "main",
                 type: "page",
                 isBlocking: false,
                 tree: mainTree
-            });
-        }
+            }});
+        }}
 
-        return { regions };
-    }
-        """)
-
+        return {{ regions }};
+    }}
+    """)
+        print(ui_schema)
+        print(f"Mode: {mode}")
         return ui_schema
     # ---------------- FILE UPLOAD ---------------- #
 
@@ -1457,22 +1507,27 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return f"{e}"
 
     @tool
-    async def get_ui_schema(page_name: Optional[str] = None) -> list:
+    async def get_ui_schema(page_name: Optional[str] = None, mode: str = "visible") -> list:
         """
-        Extract structured UI elements from the page.
+Extract a structured UI schema from the current browser page.
 
-        This returns a simplified representation of interactive
-        elements such as buttons, links, and input fields.
-        Useful for browser agents to understand what actions
-        are possible on the page.
-        Args: 
-            page_name: Optional name for the page. If not provided, uses the current page.
-        Returns:
-            A list of UI element dictionaries.
-        """
+Returns a hierarchical representation of visible and interactive elements,
+including regions (e.g., modal, overlay, page) and their element trees.
+
+Modes:
+- "visible": Only elements currently visible in the viewport (default; best for actions).
+- "interactive": Includes visible + hidden but relevant UI (modals, dropdowns).
+- "full": Entire DOM (for indexing/RAG; not recommended for interaction).
+
+Each element contains metadata such as tag, text, selector, fingerprint,
+confidence score, action hint, state (enabled/clickable), and layout (position, size, z-index).
+
+Used for UI understanding, element selection, and browser automation workflows.
+"""
         await log_chat("Getting UI schema")
         try:
-            return await session.get_ui_schema(page_name)
+            schema =  await session.get_ui_schema(page_name, mode)
+            return schema
         except Exception as e:
             return f"{e}"
 
@@ -1800,7 +1855,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
     # SAVE FILE
     # -------------------------------
     @tool
-    async def save_to_file(content: str, filename: str) -> str:
+    async def write_file(content: str, filename: str) -> str:
         """
         Save content to a file.
 
@@ -1812,9 +1867,6 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             Confirmation message.
         """
         await log_chat(f"Saving file: {filename}")
-
-        if not filename.startswith("files/"):
-            return "Invalid filename. Must start with 'files/'"
 
         try:
             full_path = resolve_user_path(filename)
@@ -1836,6 +1888,31 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             await log_chat(f"Save error: {e}")
             return str(e)
 
+    async def amend_file(content: str, filename: str) -> str:
+        """
+        Amend content to a file.
+
+        Args:
+            content: Content to save.
+            filename: Name of the file.
+
+        Returns:
+            Confirmation message.
+        """
+        await log_chat(f"Amending file: {filename}")
+        try:
+            full_path = resolve_user_path(filename)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "a", encoding="utf-8") as f:
+                f.write(content)
+
+            if file_tree_wrapper:
+                await file_tree_wrapper()
+
+            return f"Amended {filename}"
+        except Exception as e:
+            await log_chat(f"Amend error: {e}")
+            return str(e)
 
     # -------------------------------
     # READ FILE
@@ -1922,9 +1999,6 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         """
         await log_chat(f"Creating directory: {dirname}")
 
-        if not dirname.startswith("files/"):
-            return "Invalid directory name"
-
         try:
             dir_path = resolve_user_path(dirname)
 
@@ -1957,10 +2031,6 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             Confirmation message.
         """
         await log_chat(f"Deleting directory: {dirname}")
-
-        if not dirname.startswith("files/"):
-            return "Invalid directory name"
-
         try:
             dir_path = resolve_user_path(dirname)
 
@@ -1975,6 +2045,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return f"Deleted {dirname}"
 
         except Exception as e:
+            print(str(e))
             return str(e)
 
 
@@ -2020,6 +2091,60 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         except Exception as e:
             await log_chat(f"Move error: {e}")
             return str(e)
+    
+    @tool
+    async def rename_file(src: str, dst: str) -> str:
+        """
+        Rename a file.
+
+        Args:
+            src: Source path.
+            dst: Destination path.
+
+        Returns:
+            Confirmation message.
+        """
+        await log_chat(f"Renaming file: {src} → {dst}")
+        try:
+            src_path = resolve_user_path(src)
+            dst_path = resolve_user_path(dst)
+            if not os.path.exists(src_path):
+                return "Source not found"
+            os.rename(src_path, dst_path)
+            if file_tree_wrapper:
+                await file_tree_wrapper()
+            return f"Renamed {src} → {dst}"
+        except Exception as e:
+            await log_chat(f"Rename error: {e}")
+            return str(e)
+    
+    @tool
+    async def rename_folder(src: str, dst: str) -> str:
+        """
+        Rename a folder.
+
+        Args:
+            src: Source path.
+            dst: Destination path.
+
+        Returns:
+            Confirmation message.
+        """
+        await log_chat(f"Renaming folder: {src} → {dst}")
+        try:
+            src_path = resolve_user_path(src)
+            dst_path = resolve_user_path(dst)
+            if not os.path.exists(src_path):
+                return "Source not found"
+            os.rename(src_path, dst_path)
+            if file_tree_wrapper:
+                await file_tree_wrapper()
+            return f"Renamed {src} → {dst}"
+        except Exception as e:
+            await log_chat(f"Rename error: {e}")
+            return str(e)
+
+
     @tool
     async def get_user_input_from_options(options: str) -> str:
         """
@@ -2244,7 +2369,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
     misc_tools_list = [
         get_user_confirmation,
         get_all_files,
-        save_to_file,
+        write_file,
         get_user_input_from_options,
         read_file,
         convert_md,
@@ -2255,7 +2380,10 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         update_memory,
         read_memory,
         clear_memory,
-        get_current_date_time
+        get_current_date_time,
+        rename_file,
+        rename_folder,
+        amend_file
         
     ]
 
@@ -2294,6 +2422,6 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
     if misc_tools:
         return misc_tools_list
     elif only_browser_tools:
-        return browser_tools + misc_tools_imp
+        return browser_tools + misc_tools_list
     else:
         return browser_tools + misc_tools_list
