@@ -12,29 +12,40 @@ import json
 from rich import print
 import datetime
 
-# def get_base_path():
-#     if getattr(sys, "frozen", False):
-#         return sys._MEIPASS
-#     return os.getcwd()
-
-# def get_user_memory_path(base_path: str):
-#     base = base_path
-#     os.makedirs(base, exist_ok=True)
-#     return os.path.join(base, "url_memory.json")
-
-# def get_user_files_dir(base_path: str):
-#     base = os.path.join(base_path, "files")
-#     os.makedirs(base, exist_ok=True)
-#     return base
-
-# def resolve_user_path(base_path, relative_path: str):
-#     base = get_user_files_dir(base_path)
-#     return os.path.join(base, relative_path.replace("files/", ""))
-
+from langchain_community.document_loaders import RecursiveUrlLoader
+from bs4 import BeautifulSoup
+import re
 
 import os
 from typing import Dict, Optional
 
+from langchain.tools import tool
+
+from rank_bm25 import BM25Okapi
+
+class BM25Index:
+    def __init__(self):
+        self.docs = []
+        self.tokenized = []
+        self.bm25 = None
+    def add_documents(self, documents):
+        """
+        documents = [{"text": "...", "source": "..."}]
+        """
+        for doc in documents:
+            tokens = doc["text"].lower().split()  # simple tokenizer
+            self.docs.append(doc)
+            self.tokenized.append(tokens)
+        self.bm25 = BM25Okapi(self.tokenized)
+    def search(self, query, k=5):
+        tokens = query.lower().split()
+        scores = self.bm25.get_scores(tokens)
+        ranked = sorted(
+            zip(self.docs, scores),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        return ranked[:k]
 
 class BrowserSession:
     def __init__(self, context):
@@ -892,9 +903,10 @@ class BrowserSession:
 
 
 
-    async def get_ui_schema(self, page_name: Optional[str] = None, mode: str = "visible"):
+    async def get_ui_schema(self, page_name: Optional[str] = None, mode: str = None):
         page = await self.get_page(page_name)
-
+        if mode is None:
+            return "Please mention mode. Allowed modes are 'visible', 'interactive', 'full'"
         try:
             await page.wait_for_load_state("networkidle")
             await page.wait_for_timeout(2000)
@@ -977,22 +989,26 @@ class BrowserSession:
         // -------------------------------
         // Fingerprint (self-healing)
         // -------------------------------
-        function getFingerprint(el) {{
-            const tag = el.tagName.toLowerCase();
-            const text = (el.innerText || el.placeholder || "").trim().slice(0, 50);
+        function safeEncode(str) {{
+                return btoa(unescape(encodeURIComponent(str)));
+            }}
 
-            const parent = el.parentElement;
-            const parentTag = parent ? parent.tagName.toLowerCase() : "";
+            function getFingerprint(el) {{
+                const tag = el.tagName.toLowerCase();
+                const text = (el.innerText || el.placeholder || "").trim().slice(0, 50);
 
-            const rect = el.getBoundingClientRect();
+                const parent = el.parentElement;
+                const parentTag = parent ? parent.tagName.toLowerCase() : "";
 
-            return btoa(
-                tag + "|" +
-                text + "|" +
-                parentTag + "|" +
-                Math.round(rect.x / 50) + "," + Math.round(rect.y / 50)
-            );
-        }}
+                const rect = el.getBoundingClientRect();
+
+                return safeEncode(
+                    tag + "|" +
+                    text + "|" +
+                    parentTag + "|" +
+                    Math.round(rect.x / 50) + "," + Math.round(rect.y / 50)
+                );
+            }}
 
         // -------------------------------
         // Confidence
@@ -1289,7 +1305,7 @@ class BrowserSession:
 
         return "[LOGGED IN]"
 
-from langchain.tools import tool
+
 
 
 def build_tools(session, request_user_input, log_chat, misc_tools = False, only_browser_tools = False, file_tree_wrapper = None, base_path = None):
@@ -1300,6 +1316,40 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
     by opening pages, interacting with elements, reading content,
     and extracting structured information from the page.
     """
+
+    def bs4_extractor(html: str) -> str:
+        soup = BeautifulSoup(html, "lxml")
+        # ❌ Remove unwanted tags
+        for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
+            tag.decompose()
+        # ✅ Extract text
+        text = soup.get_text(separator="\n")
+        # ✅ Normalize whitespace
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n+", "\n", text)
+        lines = text.split("\n")
+        cleaned_lines = []
+        for line in lines:
+            line = line.strip()
+            # ❌ Skip empty
+            if not line:
+                continue
+            # ❌ Skip UI labels
+            if line.lower() in {
+                "world news", "politics news", "view more", "in focus"
+            }:
+                continue
+            # ❌ Skip timestamps (time)
+            if re.search(r"\b\d{1,2}:\d{2}\s?(AM|PM)\b", line):
+                continue
+            # ❌ Skip dates
+            if re.search(r"\b[A-Za-z]+\s\d{1,2},\s\d{4}\b", line):
+                continue
+            # ❌ Skip very short junk
+            if len(line) < 40:
+                continue
+            cleaned_lines.append(line)
+        return "\n".join(cleaned_lines)
 
     @tool
     async def list_tabs() -> str:
@@ -1314,6 +1364,77 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return await session.list_tabs()
         except Exception as e:
             return f"{e}"
+    
+    from urllib.parse import urlparse
+
+    def get_base_url(url: str) -> str:
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    @tool
+    async def scrape_url(url: str, query:str):
+        def is_noise(text: str) -> bool:
+            text = text.lower()
+            noise_patterns = [
+                "advertisement",
+                "subscribe now"
+            ]
+            return any(p in text for p in noise_patterns)
+        def is_error_page(doc):
+            text = doc.page_content.lower()
+            return (
+                "an error occurred" in text or
+                "reference #" in text or
+                "edgesuite.net" in text
+            )
+        def fix_url(url: str) -> str:
+            if not url:
+                return url
+            # detect duplicate http
+            if "http" in url[8:]:
+                return url[url.find("http", 8):]
+            return url
+        loader = RecursiveUrlLoader(
+            url,
+            extractor=bs4_extractor,
+            use_async=True,
+            headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X)"
+                },
+            prevent_outside=True,
+            base_url=get_base_url(url)
+        )
+        docs = []
+        async for doc in loader.alazy_load():
+            # ✅ Fix URL
+            source = fix_url(doc.metadata.get("source"))
+            # ❌ Skip broken URLs
+            if not source.startswith("http"):
+                continue
+            # ❌ Skip error pages
+            if is_error_page(doc):
+                continue
+            # ✅ Clean content
+            cleaned_lines = doc.page_content.split("\n")
+            for line in cleaned_lines:
+                line = line.strip()
+                if not line:
+                    continue
+                if len(line) < 40:
+                    continue
+                if is_noise(line):
+                    continue
+                docs.append({
+                    "text": line,
+                    "source": source
+                })
+        return docs
+        ### code to convert to embeddings
+        bm25 = BM25Index()
+        bm25.add_documents(docs)
+        results = bm25.search("Multibagger stocks")
+        return results
+
     @tool
     async def list_tabs_detailed() -> str:
         """
@@ -1507,23 +1628,23 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return f"{e}"
 
     @tool
-    async def get_ui_schema(page_name: Optional[str] = None, mode: str = "visible") -> list:
+    async def get_ui_schema(page_name: Optional[str] = None, mode: str = None) -> list:
         """
-Extract a structured UI schema from the current browser page.
+        Extract a structured UI schema from the current browser page.
 
-Returns a hierarchical representation of visible and interactive elements,
-including regions (e.g., modal, overlay, page) and their element trees.
+        Returns a hierarchical representation of visible and interactive elements,
+        including regions (e.g., modal, overlay, page) and their element trees.
 
-Modes:
-- "visible": Only elements currently visible in the viewport (default; best for actions).
-- "interactive": Includes visible + hidden but relevant UI (modals, dropdowns).
-- "full": Entire DOM (for indexing/RAG; not recommended for interaction).
+        Modes:
+        - "visible": Only elements currently visible in the viewport (default; best for actions).
+        - "interactive": Includes visible + hidden but relevant UI (modals, dropdowns).
+        - "full": Entire DOM (for indexing/RAG; not recommended for interaction).
 
-Each element contains metadata such as tag, text, selector, fingerprint,
-confidence score, action hint, state (enabled/clickable), and layout (position, size, z-index).
+        Each element contains metadata such as tag, text, selector, fingerprint,
+        confidence score, action hint, state (enabled/clickable), and layout (position, size, z-index).
 
-Used for UI understanding, element selection, and browser automation workflows.
-"""
+        Used for UI understanding, element selection, and browser automation workflows.
+        """
         await log_chat("Getting UI schema")
         try:
             schema =  await session.get_ui_schema(page_name, mode)
@@ -1817,6 +1938,9 @@ Used for UI understanding, element selection, and browser automation workflows.
         await log_chat("Getting full file tree")
 
         try:
+            if file_tree_wrapper:
+                await log_chat("Using file tree wrapper")
+                return await file_tree_wrapper()
             base_dir = get_user_files_dir()
             nodes = []
 
