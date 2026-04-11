@@ -28,24 +28,37 @@ class BM25Index:
         self.docs = []
         self.tokenized = []
         self.bm25 = None
+
     def add_documents(self, documents):
-        """
-        documents = [{"text": "...", "source": "..."}]
-        """
         for doc in documents:
-            tokens = doc["text"].lower().split()  # simple tokenizer
+            tokens = doc["text"].lower().split()
             self.docs.append(doc)
             self.tokenized.append(tokens)
+
         self.bm25 = BM25Okapi(self.tokenized)
+
     def search(self, query, k=5):
         tokens = query.lower().split()
         scores = self.bm25.get_scores(tokens)
+
         ranked = sorted(
             zip(self.docs, scores),
             key=lambda x: x[1],
             reverse=True
         )
-        return ranked[:k]
+
+        return [
+            {
+                "text": doc["text"],
+                "score": score,
+                # "source": doc.get("source"),
+                "href": doc.get("href")
+            }
+            for doc, score in ranked[:k]
+        ]
+
+
+
 
 class BrowserSession:
     def __init__(self, context):
@@ -84,6 +97,64 @@ class BrowserSession:
         self.active_page = name
 
         return f"[OPENED] {url} -> {name}"
+
+
+    async def search_url(self, page_name, query: str) -> str:
+        page = await self.get_page(page_name)
+
+        # 🔍 Candidate selectors for search bar
+        selectors = [
+            "input[type='search']",
+            "input[placeholder*='search' i]",
+            "input[name*='search' i]",
+            "input[id*='search' i]",
+            "input[class*='search' i]"
+        ]
+
+        search_box = None
+
+        # ✅ Try all selectors
+        for sel in selectors:
+            elements = await page.query_selector_all(sel)
+
+            for el in elements:
+                try:
+                    if await el.is_visible() and await el.is_enabled():
+                        search_box = el
+                        break
+                except:
+                    continue
+
+            if search_box:
+                break
+
+        # ❌ No search bar found
+        if not search_box:
+            return "No search bar detected"
+
+        # ✅ Type query
+        await search_box.fill("")
+        await search_box.fill(query)
+
+        # Try pressing Enter
+        try:
+            await search_box.press("Enter")
+        except:
+            pass
+
+        # Optional: click search button if exists
+        try:
+            await self.submit_form(page_name=page_name)
+        except:
+            pass
+
+
+
+        # Wait for results
+        await page.wait_for_timeout(3000)
+
+        content = await page.content()
+        return await self.get_ui_schema(page_name=page_name, mode="visible")
 
     async def get_page(self, name: Optional[str] = None):
         name = name or self.active_page
@@ -1317,39 +1388,57 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
     and extracting structured information from the page.
     """
 
-    def bs4_extractor(html: str) -> str:
+    def bs4_extractor(html: str):
         soup = BeautifulSoup(html, "lxml")
+
         # ❌ Remove unwanted tags
         for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
             tag.decompose()
-        # ✅ Extract text
-        text = soup.get_text(separator="\n")
-        # ✅ Normalize whitespace
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n+", "\n", text)
-        lines = text.split("\n")
-        cleaned_lines = []
-        for line in lines:
-            line = line.strip()
+
+        elements = soup.find_all(["h1", "h2", "h3", "p", "a", "li", "input"])
+
+        results = []
+
+        for el in elements:
+            text = el.get_text(separator=" ", strip=True)
+
             # ❌ Skip empty
-            if not line:
+            if not text:
                 continue
+
+            # ❌ Normalize whitespace
+            text = re.sub(r"[ \t]+", " ", text)
+
             # ❌ Skip UI labels
-            if line.lower() in {
+            if text.lower() in {
                 "world news", "politics news", "view more", "in focus"
             }:
                 continue
-            # ❌ Skip timestamps (time)
-            if re.search(r"\b\d{1,2}:\d{2}\s?(AM|PM)\b", line):
+
+            # ❌ Skip timestamps
+            if re.search(r"\b\d{1,2}:\d{2}\s?(AM|PM)\b", text):
                 continue
+
             # ❌ Skip dates
-            if re.search(r"\b[A-Za-z]+\s\d{1,2},\s\d{4}\b", line):
+            if re.search(r"\b[A-Za-z]+\s\d{1,2},\s\d{4}\b", text):
                 continue
-            # ❌ Skip very short junk
-            if len(line) < 40:
+
+            # ❌ Skip short junk
+            if len(text) < 40:
                 continue
-            cleaned_lines.append(line)
-        return "\n".join(cleaned_lines)
+
+            result = {
+                "text": text,
+                "tag": el.name,
+                "id": el.get("id"),
+                "name": el.get("name"),
+                "href": el.get("href") if el.name == "a" else None
+            }
+
+            results.append(result)
+
+        return json.dumps(results)
+
 
     @tool
     async def list_tabs() -> str:
@@ -1372,14 +1461,18 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         return f"{parsed.scheme}://{parsed.netloc}"
 
     @tool
-    async def scrape_url(url: str, query:str):
-        def is_noise(text: str) -> bool:
-            text = text.lower()
-            noise_patterns = [
-                "advertisement",
-                "subscribe now"
-            ]
-            return any(p in text for p in noise_patterns)
+    async def scrape_url(url: str, query: str):
+        """
+            This tool is used to scrape the website and return relevant information inline with the query.
+            Args:
+                url:str -> this is the url of the website needed for scrapping.
+                query:str -> this is the query that needs to be answered to.
+            
+            Response:
+                returns list of relevant sections of the webpage.
+        
+        """
+        await log_chat(f"Scrapping tool called for query {query} on url {url}")
         def is_error_page(doc):
             text = doc.page_content.lower()
             return (
@@ -1387,53 +1480,81 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
                 "reference #" in text or
                 "edgesuite.net" in text
             )
+
         def fix_url(url: str) -> str:
             if not url:
                 return url
-            # detect duplicate http
             if "http" in url[8:]:
                 return url[url.find("http", 8):]
             return url
+
         loader = RecursiveUrlLoader(
             url,
-            extractor=bs4_extractor,
+            extractor=bs4_extractor,  # returns JSON string
             use_async=True,
+            max_depth=3,  # 🔥 reduce depth (5 is too aggressive)
             headers={
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X)"
-                },
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "text/html"
+            },
             prevent_outside=True,
             base_url=get_base_url(url)
         )
-        docs = []
+
+        documents = []
+
         async for doc in loader.alazy_load():
-            # ✅ Fix URL
+
             source = fix_url(doc.metadata.get("source"))
-            # ❌ Skip broken URLs
+
             if not source.startswith("http"):
                 continue
-            # ❌ Skip error pages
+
             if is_error_page(doc):
                 continue
-            # ✅ Clean content
-            cleaned_lines = doc.page_content.split("\n")
-            for line in cleaned_lines:
-                line = line.strip()
-                if not line:
+
+            try:
+                # ✅ parse JSON from extractor
+                structured = json.loads(doc.page_content)
+            except:
+                continue
+
+            for item in structured:
+                text = item.get("text", "").strip()
+
+                if not text or len(text) < 40:
                     continue
-                if len(line) < 40:
-                    continue
-                if is_noise(line):
-                    continue
-                docs.append({
-                    "text": line,
-                    "source": source
+
+                documents.append({
+                    "text": text,
+                    "source": source,
+                    "tag": item.get("tag"),
+                    "href": item.get("href")
                 })
-        return docs
-        ### code to convert to embeddings
+
+        # ✅ Deduplicate
+        seen = set()
+        unique_docs = []
+
+        for doc in documents:
+            if doc["text"] in seen:
+                continue
+            seen.add(doc["text"])
+            unique_docs.append(doc)
+        print(documents)
+        # ✅ BM25
         bm25 = BM25Index()
-        bm25.add_documents(docs)
-        results = bm25.search("Multibagger stocks")
-        return results
+        bm25.add_documents(unique_docs)
+
+        response =  bm25.search(query, k=5)
+        print("BM25\n\n")
+        print(response)
+        if len(response)>0:
+            return response
+        print("Nothing could be found that matches your query.")
+        return "Nothing could be found that matches your query."
+
+
 
     @tool
     async def list_tabs_detailed() -> str:
@@ -1448,6 +1569,27 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return await session.list_tabs_detailed()
         except Exception as e:
             return f"{e}"
+
+    @tool
+    async def search_url(page_name:str, query:str) -> str:
+        """
+        This tool is intended to search the website if a search bar is present.
+
+        Args:
+            page_name: str -> Name of the page on which the search is to be performed.
+            query: str -> query to be searched.
+        
+        Returns:
+            ui_schema of the visible section. 
+        
+        
+        """
+        log_chat("Searching URL.")
+        try:
+            return await session.search_url(page_name, query)
+        except Exception as e:
+            return f"{e}"
+
     
     @tool
     async def close_tab(name: str) -> str:
@@ -2520,6 +2662,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         get_title,
         get_ui_schema,
         get_visible_modal_schema,
+        # scrape_url,
         get_all_links,
         get_all_headings,
         submit_form,
@@ -2530,7 +2673,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         list_tabs,
         list_tabs_detailed,
         close_tab,
-        switch_tab
+        switch_tab,
+        search_url
     ]
 
     misc_tools_imp = [

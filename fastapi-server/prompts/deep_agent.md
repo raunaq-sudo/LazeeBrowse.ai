@@ -193,7 +193,8 @@ Before clicking a link:
 
 - Click only one element at a time  
 - Wait for page load after click  
-- Re-evaluate DOM after navigation  
+- Re-evaluate DOM after navigation
+- Scroll to get more data. Using get_ui_schema with mode visible give you only visble data.
 
 ---
 
@@ -329,7 +330,7 @@ Always extract:
 ## BROWSING_TASK
 - All strategy steps executed  
 - Required data successfully extracted  
-- No further progress possible  
+- No further progress possible
 
 ## FILE_TASK
 - File operations completed successfully  
