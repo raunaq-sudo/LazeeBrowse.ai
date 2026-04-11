@@ -182,7 +182,7 @@ async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
 
 async def log_chat(message: str, safe_ws: SafeWebSocket):
     """Send log message to client"""
-    print("Sending Log.")
+    # print("Sending Log.")
     await safe_ws.send({
         "type": "log",
         "content": message,
@@ -238,11 +238,11 @@ async def file_tree_data(safe_ws: SafeWebSocket):
     Sends the result to the frontend via WebSocket.
     """
 
-    await log_chat("Getting full file tree", safe_ws)
-    await log_chat(f"Project dir: {project_dir}", safe_ws)
+    # await log_chat("Getting full file tree", safe_ws)
+    # await log_chat(f"Project dir: {project_dir}", safe_ws)
     try:
         base_dir = get_user_files_dir()
-        await log_chat(f"Base dir: {base_dir}", safe_ws)
+        # await log_chat(f"Base dir: {base_dir}", safe_ws)
         nodes = []
 
         for root, dirs, files in os.walk(base_dir):
@@ -592,7 +592,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             agent = create_deep_agent(
                 model=llm,
                 tools=tools,
-                # backend = FilesystemBackend(root_dir=os.path.join(project_dir,"files"), virtual_mode=True),
+                backend = FilesystemBackend(root_dir=os.path.join(project_dir,"files"), virtual_mode=True),
                 system_prompt=load_prompt("deep_agent.md"),
                 # interrupt_on={
                 #     "delete_file":True,
