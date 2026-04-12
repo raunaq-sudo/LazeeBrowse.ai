@@ -166,7 +166,7 @@ async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
         # Wait for user response (with 5 minute timeout)
         try:
             user_response = await asyncio.wait_for(future, timeout=300.0)
-            await log_chat(f"User response on request: {user_response}", safe_ws)
+            # await log_chat(f"User response on request: {user_response}", safe_ws)
             await safe_ws.send({
                 "type": "agent_thinking",
                 "timestamp": datetime.now().isoformat(),
@@ -279,7 +279,7 @@ async def file_tree_data(safe_ws: SafeWebSocket):
         result = {"nodes": nodes}
 
         # 🔥 Avoid logging huge payloads
-        await log_chat(f"File tree nodes: {len(nodes)} items", safe_ws)
+        # await log_chat(f"File tree nodes: {len(nodes)} items", safe_ws)
 
 
 
@@ -547,7 +547,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         
         try:
             sys_prompt_gen = load_prompt("system_prompt_generator.md")
-            await log_chat(f"System prompt generator loaded: {sys_prompt_gen[:100] if sys_prompt_gen else 'None'}...", safe_ws)
+            # await log_chat(f"System prompt generator loaded: {sys_prompt_gen[:100] if sys_prompt_gen else 'None'}...", safe_ws)
         except FileNotFoundError:
             sys_prompt_gen = "Generate a system prompt for web browsing based on the conversation."
         

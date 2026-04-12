@@ -559,7 +559,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         results = []
         errors = []
         await log_chat("Filling form")
-        await log_chat(f"Form elements: {form_elements}")
+        # await log_chat(f"Form elements: {form_elements}")
         for element in form_elements:
             try:
                 selector = element.get("selector")
@@ -574,13 +574,13 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
                 value = await request_user_input(
                     f"Enter value for field: {selector} : {value}"
                 )
-                await log_chat(f"Value: {value}")
+                # await log_chat(f"Value: {value}")
                 if value == "null" or value == "undefined" or value.strip() == "":
                     value = element.get("value")
 
                 # Optional: clear before typing
                 try:
-                    await log_chat(f"Clearing {selector}")
+                    # await log_chat(f"Clearing {selector}")
                     await session.clear(selector, page_name)
                 except:
                     await log_chat(f"Failed to clear {selector}")
@@ -619,7 +619,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         Returns:
             User input ("true" or "false").
         """
-        await log_chat(f"Getting user input for {query}")
+        await log_chat(f"Getting user input.")
         try:
             user_response =  await request_user_input(query + " (yes/no)")
             if user_response == "null" or user_response == "undefined" or user_response.strip() == "":
@@ -756,7 +756,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
 
         try:
             if file_tree_wrapper:
-                await log_chat("Using file tree wrapper")
+                # await log_chat("Using file tree wrapper")
                 return await file_tree_wrapper()
             base_dir = get_user_files_dir()
             nodes = []

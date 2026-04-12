@@ -276,6 +276,7 @@ get_user_confirmation("Please complete CAPTCHA and confirm")
 - Detect modal/popup/overlay  
 - Handle or close before proceeding  
 - Never interact with background elements  
+- Check for Overlay in order to detect if there is a modal present.
 
 ---
 
