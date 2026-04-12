@@ -12,13 +12,14 @@ from langgraph.checkpoint.memory import MemorySaver
 from playwright.async_api import async_playwright
 
 from deepagents import create_deep_agent
-from browser_tool import BrowserSession, build_tools
+from browser_tools_revised import build_tools
 from langchain.agents import create_agent
 
 from pydantic import BaseModel, Field
 from typing import Optional
 
 import os
+from browser_session_handler import BrowserSession
 
 from config import get_models
 
