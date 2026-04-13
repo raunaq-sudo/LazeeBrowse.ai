@@ -533,24 +533,10 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         await file_tree_data(safe_ws)
         # Get agent response with timeout
         
-        
-        
-        
-        
         # -------------------------------
         # BROWSING FLOW
         # -------------------------------
-        await log_wrapper("🌐 Browsing required. Running browser...")
-        
-        # Generate system prompt
-        await log_wrapper("📝 Generating system prompt...")
-        
-        try:
-            sys_prompt_gen = load_prompt("system_prompt_generator.md")
-            # await log_chat(f"System prompt generator loaded: {sys_prompt_gen[:100] if sys_prompt_gen else 'None'}...", safe_ws)
-        except FileNotFoundError:
-            sys_prompt_gen = "Generate a system prompt for web browsing based on the conversation."
-        
+
         # Check connection before browser launch
         if safe_ws.is_closed:
             await log_wrapper("Connection closed, aborting browser session")
@@ -588,6 +574,16 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 base_path=project_dir,
                 only_browser_tools=True
             )
+
+            subagent_tools = build_tools(
+                session=session,
+                request_user_input=request_input_wrapper,
+                log_chat=log_wrapper,
+                file_tree_wrapper=file_tree_wrapper,
+                base_path=project_dir,
+                subagent=True
+            )
+
             
             await log_chat(f"Project path: {project_dir}", safe_ws)
             agent = create_deep_agent(
@@ -600,6 +596,15 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 #     "delete_directory":True
                 # },
                 # checkpointer=checkpointer
+                subagents = [{
+                    "name":"website_crawler",
+                    "description":"Used for indepth analysis of the website url.",
+                    "system_prompt":"""
+                    Your primary role is to investigate the url by navigating through each link and 
+                    provide a detialed analysis of the same based on the query posed by the parent agent.
+                    """,
+                    "tools":subagent_tools
+                }]
                 
                 
             )

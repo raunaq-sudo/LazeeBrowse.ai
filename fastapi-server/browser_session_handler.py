@@ -11,7 +11,7 @@ class BrowserSession:
     def __init__(self, context):
         self.context = context
         self.pages: Dict[str, any] = {}
-        self.max_timeout = 10000
+        self.max_timeout = 20000
         self.active_page: Optional[str] = None
 
         # Auto-detect new tabs

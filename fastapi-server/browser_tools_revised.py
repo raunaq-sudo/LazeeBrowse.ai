@@ -54,7 +54,7 @@ class BM25Index:
 
 # ---------------- MAIN ---------------- #
 
-def build_tools(session, request_user_input, log_chat, misc_tools = False, only_browser_tools = False, file_tree_wrapper = None, base_path = None):
+def build_tools(session, request_user_input, log_chat, misc_tools = False, only_browser_tools = False, file_tree_wrapper = None, base_path = None, subagent=False):
     """
     Create LangChain tools bound to a BrowserSession instance.
 
@@ -259,7 +259,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         
         
         """
-        log_chat("Searching URL.")
+        await log_chat("Searching URL.")
         try:
             return await session.search_url(page_name, query)
         except Exception as e:
@@ -1366,5 +1366,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         return misc_tools_list
     elif only_browser_tools:
         return browser_tools + misc_tools_list
+    elif subagent:
+        return browser_tools
     else:
         return browser_tools + misc_tools_list

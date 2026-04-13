@@ -349,3 +349,4 @@ Always extract:
 👉 Strict URL-based navigation only  
 👉 No speculation. No hallucination. Only verified data  
 👉 Minimum 5 navigations per site  
+👉 All browsing activities to be passed on to the website_crawler subagent with the ruleset mentioned above.
