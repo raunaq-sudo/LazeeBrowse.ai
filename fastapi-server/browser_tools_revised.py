@@ -1325,6 +1325,23 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return str(e)
 
 
+    @tool
+    async def action_logger(action:str)->str:
+        """
+        Use this tool to send your action to the user.
+        Args:
+            action: the action taken or you are about to take
+        Response:
+            success message
+        """
+        try:
+            await log_chat(action)
+            return "Success"
+        except Exception as e:
+            print(f"Error in action logger.")
+            return "Error. Please try again."
+
+
     misc_tools_list = [
         get_user_confirmation,
         get_all_files,
@@ -1342,7 +1359,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         get_current_date_time,
         rename_file,
         rename_folder,
-        amend_file
+        amend_file,
+        action_logger
         
     ]
 

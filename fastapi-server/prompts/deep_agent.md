@@ -99,3 +99,4 @@ Stop when:
 - Strategy must be confirmed before any execution
 - No invented URLs — only follow discovered or pre-defined links
 - No speculation, no hallucination — verified data only
+- Always send the action you are taking or about to take using the action_logger tool

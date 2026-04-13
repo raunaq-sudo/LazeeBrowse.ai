@@ -1092,8 +1092,12 @@ class BrowserSession:
                 if (el.title) {{
                     return el.title;
                 }}
-
-                return el.innerText.slice(0, 80);
+                if (el.innerText){{
+                    return el.innerText.slice(0, 80);
+                }} else {{
+                    return ""
+                }}
+                
             }}
 
 
