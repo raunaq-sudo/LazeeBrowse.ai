@@ -299,6 +299,23 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             return f"{e}"
     
     @tool
+    async def find_tab_by_url(keyword:str) -> str:
+        """
+        Get tab name based on keywords in the url.
+        Args:
+            keyword: keyword to be searched in the urls of all tabs
+        Returns:
+            page_name if present.
+        """
+        await log_chat(f"Searching for tab based on url:{keyword}")
+        try:
+            return await session.find_tab_by_url(keyword)
+        except Exception as e:
+            print(f"Exception in searching for keyword in Url : {str(e)}")
+            return str(e)
+
+
+    @tool
     async def open_new_tab(url, page_name) -> str:
         """
         Open a new browser tab.
@@ -328,7 +345,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         await log_chat(f"Opening {url}")
         try:
             response = await session.open_url(url, page_name)
-            return await session.get_ui_schema(page_name)
+            return await session.get_ui_schema(page_name, 'visible')
         except Exception as e:
             await log_chat(f"Error opening {url}: {e}")
             return f"{e}"
@@ -604,7 +621,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         if errors:
             response_parts.append(f"Errors: {' | '.join(errors)}")
         else:
-            await session.submit_form() # 🔥 Submit form
+            await session.submit_form(page_name) # 🔥 Submit form
 
         return " | ".join(response_parts)
     
@@ -645,7 +662,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         """
         await log_chat("Getting all links with text")
         try:
-            return await session.get_all_links_with_text()
+            return await session.get_all_links_with_text(page_name)
         except Exception as e:
             return f"{e}"
         
@@ -829,6 +846,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
             await log_chat(f"Save error: {e}")
             return str(e)
 
+    @tool
     async def amend_file(content: str, filename: str) -> str:
         """
         Amend content to a file.
@@ -1349,7 +1367,8 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         list_tabs_detailed,
         close_tab,
         switch_tab,
-        search_url
+        search_url,
+        find_tab_by_url
     ]
 
     misc_tools_imp = [

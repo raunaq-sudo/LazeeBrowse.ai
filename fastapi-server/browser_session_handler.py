@@ -11,7 +11,7 @@ class BrowserSession:
     def __init__(self, context):
         self.context = context
         self.pages: Dict[str, any] = {}
-        self.max_timeout = 10000
+        self.max_timeout = 30000
         self.active_page: Optional[str] = None
 
         # Auto-detect new tabs
@@ -26,7 +26,7 @@ class BrowserSession:
         name = f"auto_{len(self.pages)+1}"
         self.pages[name] = page
         self.active_page = name
-        self.switch_tab(name)
+        await self.switch_tab(name)
         print(f"[NEW TAB] {name} -> {page.url}")
 
     async def new_page(self, name: str, url: str):
@@ -116,7 +116,7 @@ class BrowserSession:
         if name is None and self.active_page is not None:
             name = self.active_page
         
-        self.switch_tab(name)
+        await self.switch_tab(name)
         
 
         return self.pages[name]
@@ -141,6 +141,9 @@ class BrowserSession:
                 })
         return result
 
+    async def close_tab(self, name: str):
+        return await self.close_page(name)
+
     async def close_page(self, name: str):
         page = await self.get_page(name)
         await page.close()
@@ -151,13 +154,14 @@ class BrowserSession:
 
         return f"[CLOSED] {name}"
 
-    def switch_tab(self, name: str):
+    async def switch_tab(self, name: str):
         if name not in self.pages:
             raise Exception(f"Tab '{name}' not found")
         self.active_page = name
+        await self.pages[name].bring_to_front()
         return f"[SWITCHED] {name}"
 
-    def find_tab_by_url(self, keyword: str):
+    async def find_tab_by_url(self, keyword: str):
         for name, page in self.pages.items():
             if keyword in page.url:
                 return name
@@ -469,35 +473,6 @@ class BrowserSession:
         print(f"Modal schema: {result}")
         return result
 
-    def filter_ui_tree_by_confidence(self, node, threshold=3):
-        """
-        Recursively filter UI tree based on confidence.
-        Keeps only nodes with confidence > threshold OR having valid children.
-        """
-
-        if not node:
-            return None
-
-        meta = node.get("meta", {})
-        confidence = meta.get("confidence", 0)
-
-        # Recursively filter children
-        filtered_children = []
-        for child in node.get("children", []):
-            filtered_child = filter_ui_tree_by_confidence(child, threshold)
-            if filtered_child:
-                filtered_children.append(filtered_child)
-
-        # Keep node if:
-        # 1. It has high confidence
-        # 2. OR it has valid children
-        if confidence > threshold or filtered_children:
-            return {
-                **node,
-                "children": filtered_children
-            }
-
-        return None
 
     async def get_all_inputs_with_placeholder(self, page_name: Optional[str] = None):
         page = await self.get_page(page_name)
@@ -1105,12 +1080,29 @@ class BrowserSession:
             return "container";
         }}
 
+        function extractText(el) {{
+                if (el.innerText && el.innerText.trim().length < 80) {{
+                    return el.innerText;
+                }}
+
+                if (el.getAttribute("aria-label")) {{
+                    return el.getAttribute("aria-label");
+                }}
+
+                if (el.title) {{
+                    return el.title;
+                }}
+
+                return el.innerText.slice(0, 80);
+            }}
+
+
         // -------------------------------
         // Extract meta
         // -------------------------------
         function extractMeta(el) {{
             const tag = el.tagName.toLowerCase();
-            let text = el.innerText || el.value || "";
+            let text = extractText(el)
 
             if (tag === "input") {{
                 text = el.placeholder || el.value || "";

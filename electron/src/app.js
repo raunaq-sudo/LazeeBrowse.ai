@@ -75,6 +75,8 @@ function connectToAgent() {
     
     }))
   };
+  
+  setFormInputRequired(false, null)
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);

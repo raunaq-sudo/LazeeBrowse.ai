@@ -389,39 +389,29 @@ def clean_up_response(response):
     def extract_tool_calls(obj):
         calls = []
 
-        # standard tool calls
+        # --- Attribute-based (AIMessage objects) ---
         if hasattr(obj, "tool_calls") and obj.tool_calls:
-            # calls.extend(obj.tool_calls)
             for c in obj.tool_calls:
                 calls.append(sanitize_tool_call(c))
 
-        # invalid tool calls (CRITICAL for your case)
         if hasattr(obj, "invalid_tool_calls") and obj.invalid_tool_calls:
-            # calls.extend(obj.invalid_tool_calls)
-            for c in obj.tool_calls:
+            for c in obj.invalid_tool_calls:
                 calls.append(sanitize_tool_call(c))
 
-        # dict-based
-        if isinstance(obj, dict):
-            if isinstance(obj.get("tool_calls"), list):
-                # calls.extend(obj["tool_calls"])
-                for c in obj.tool_calls:
-                    calls.append(sanitize_tool_call(c))
-            if isinstance(obj.get("invalid_tool_calls"), list):
-                # calls.extend(obj["invalid_tool_calls"])
-                for c in obj.tool_calls:
-                    calls.append(sanitize_tool_call(c))
-
-        # additional kwargs (DeepSeek / OpenAI style)
+        # --- additional_kwargs (DeepSeek / OpenAI style) ---
         if hasattr(obj, "additional_kwargs") and isinstance(obj.additional_kwargs, dict):
-            tc = obj.additional_kwargs.get("tool_calls")
-            if isinstance(tc, list):
-                # calls.extend(tc)
-                for c in obj.tool_calls:
-                    calls.append(sanitize_tool_call(c))
+            for c in obj.additional_kwargs.get("tool_calls", []):
+                calls.append(sanitize_tool_call(c))
+
+        # --- Dict-based ---
+        if isinstance(obj, dict):
+            for c in obj.get("tool_calls", []):
+                calls.append(sanitize_tool_call(c))
+
+            for c in obj.get("invalid_tool_calls", []):
+                calls.append(sanitize_tool_call(c))
 
         return calls
-
     # -------------------------------
     # 1. structured_response
     # -------------------------------
