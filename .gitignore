@@ -1,4 +1,6 @@
 electron/node_modules/
+electron/release
+electron/backend
 fastapi-server/venv/
 fastapi-server/.env
 
@@ -6,3 +8,6 @@ fastapi-server/files
 fastapi-server/memory
 fastapi-server/embeddings
 fastapi-server/models
+fastapi-server/dist
+fastapi-server/build
+fastapi-server/__pycache__

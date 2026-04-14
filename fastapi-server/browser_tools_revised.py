@@ -10,46 +10,46 @@ import sys
 import json
 from rich import print
 import datetime
-from langchain_community.document_loaders import RecursiveUrlLoader
+# from langchain_community.document_loaders import RecursiveUrlLoader
 from bs4 import BeautifulSoup
 import re
 from typing import Dict, Optional
 from langchain.tools import tool
-from rank_bm25 import BM25Okapi
+# from rank_bm25 import BM25Okapi
 # ---------------- BM25 ---------------- #
 
-class BM25Index:
-    def __init__(self):
-        self.docs = []
-        self.tokenized = []
-        self.bm25 = None
+# class BM25Index:
+#     def __init__(self):
+#         self.docs = []
+#         self.tokenized = []
+#         self.bm25 = None
 
-    def add_documents(self, documents):
-        for doc in documents:
-            tokens = doc["text"].lower().split()
-            self.docs.append(doc)
-            self.tokenized.append(tokens)
+#     def add_documents(self, documents):
+#         for doc in documents:
+#             tokens = doc["text"].lower().split()
+#             self.docs.append(doc)
+#             self.tokenized.append(tokens)
 
-        self.bm25 = BM25Okapi(self.tokenized)
+#         self.bm25 = BM25Okapi(self.tokenized)
 
-    def search(self, query, k=5):
-        tokens = query.lower().split()
-        scores = self.bm25.get_scores(tokens)
+#     def search(self, query, k=5):
+#         tokens = query.lower().split()
+#         scores = self.bm25.get_scores(tokens)
 
-        ranked = sorted(
-            zip(self.docs, scores),
-            key=lambda x: x[1],
-            reverse=True
-        )
+#         ranked = sorted(
+#             zip(self.docs, scores),
+#             key=lambda x: x[1],
+#             reverse=True
+#         )
 
-        return [
-            {
-                "text": doc["text"],
-                "score": float(score),
-                "source": doc.get("source")
-            }
-            for doc, score in ranked[:k]
-        ]
+#         return [
+#             {
+#                 "text": doc["text"],
+#                 "score": float(score),
+#                 "source": doc.get("source")
+#             }
+#             for doc, score in ranked[:k]
+#         ]
 
 
 # ---------------- MAIN ---------------- #
@@ -135,99 +135,99 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         parsed = urlparse(url)
         return f"{parsed.scheme}://{parsed.netloc}"
 
-    @tool
-    async def scrape_url(url: str, query: str):
-        """
-            This tool is used to scrape the website and return relevant information inline with the query.
-            Args:
-                url:str -> this is the url of the website needed for scrapping.
-                query:str -> this is the query that needs to be answered to.
+    # @tool
+    # async def scrape_url(url: str, query: str):
+    #     """
+    #         This tool is used to scrape the website and return relevant information inline with the query.
+    #         Args:
+    #             url:str -> this is the url of the website needed for scrapping.
+    #             query:str -> this is the query that needs to be answered to.
             
-            Response:
-                returns list of relevant sections of the webpage.
+    #         Response:
+    #             returns list of relevant sections of the webpage.
         
-        """
-        await log_chat(f"Scrapping tool called for query {query} on url {url}")
-        def is_error_page(doc):
-            text = doc.page_content.lower()
-            return (
-                "an error occurred" in text or
-                "reference #" in text or
-                "edgesuite.net" in text
-            )
+    #     """
+    #     await log_chat(f"Scrapping tool called for query {query} on url {url}")
+    #     def is_error_page(doc):
+    #         text = doc.page_content.lower()
+    #         return (
+    #             "an error occurred" in text or
+    #             "reference #" in text or
+    #             "edgesuite.net" in text
+    #         )
 
-        def fix_url(url: str) -> str:
-            if not url:
-                return url
-            if "http" in url[8:]:
-                return url[url.find("http", 8):]
-            return url
+    #     def fix_url(url: str) -> str:
+    #         if not url:
+    #             return url
+    #         if "http" in url[8:]:
+    #             return url[url.find("http", 8):]
+    #         return url
 
-        loader = RecursiveUrlLoader(
-            url,
-            extractor=bs4_extractor,  # returns JSON string
-            use_async=True,
-            max_depth=3,  # 🔥 reduce depth (5 is too aggressive)
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "text/html"
-            },
-            prevent_outside=True,
-            base_url=get_base_url(url)
-        )
+    #     loader = RecursiveUrlLoader(
+    #         url,
+    #         extractor=bs4_extractor,  # returns JSON string
+    #         use_async=True,
+    #         max_depth=3,  # 🔥 reduce depth (5 is too aggressive)
+    #         headers={
+    #             "User-Agent": "Mozilla/5.0",
+    #             "Accept": "text/html"
+    #         },
+    #         prevent_outside=True,
+    #         base_url=get_base_url(url)
+    #     )
 
-        documents = []
+    #     documents = []
 
-        async for doc in loader.alazy_load():
+    #     async for doc in loader.alazy_load():
 
-            source = fix_url(doc.metadata.get("source"))
+    #         source = fix_url(doc.metadata.get("source"))
 
-            if not source.startswith("http"):
-                continue
+    #         if not source.startswith("http"):
+    #             continue
 
-            if is_error_page(doc):
-                continue
+    #         if is_error_page(doc):
+    #             continue
 
-            try:
-                # ✅ parse JSON from extractor
-                structured = json.loads(doc.page_content)
-            except:
-                continue
+    #         try:
+    #             # ✅ parse JSON from extractor
+    #             structured = json.loads(doc.page_content)
+    #         except:
+    #             continue
 
-            for item in structured:
-                text = item.get("text", "").strip()
+    #         for item in structured:
+    #             text = item.get("text", "").strip()
 
-                if not text or len(text) < 40:
-                    continue
+    #             if not text or len(text) < 40:
+    #                 continue
 
-                documents.append({
-                    "text": text,
-                    "source": source,
-                    "tag": item.get("tag"),
-                    "href": item.get("href")
-                })
+    #             documents.append({
+    #                 "text": text,
+    #                 "source": source,
+    #                 "tag": item.get("tag"),
+    #                 "href": item.get("href")
+    #             })
 
-        # ✅ Deduplicate
-        seen = set()
-        unique_docs = []
+    #     # ✅ Deduplicate
+    #     seen = set()
+    #     unique_docs = []
 
-        for doc in documents:
-            if doc["text"] in seen:
-                continue
-            seen.add(doc["text"])
-            unique_docs.append(doc)
-        print(documents)
-        # ✅ BM25
-        bm25 = BM25Index()
-        bm25.add_documents(unique_docs)
+    #     for doc in documents:
+    #         if doc["text"] in seen:
+    #             continue
+    #         seen.add(doc["text"])
+    #         unique_docs.append(doc)
+    #     print(documents)
+    #     # ✅ BM25
+    #     bm25 = BM25Index()
+    #     bm25.add_documents(unique_docs)
 
-        response =  bm25.search(query, k=5)
-        print("BM25\n\n")
-        print(response)
-        if len(response)>0:
-            return response
-        print("Nothing could be found that matches your query.")
-        return "Nothing could be found that matches your query."
+    #     response =  bm25.search(query, k=5)
+    #     print("BM25\n\n")
+    #     print(response)
+    #     if len(response)>0:
+    #         return response
+    #     print("Nothing could be found that matches your query.")
+    #     return "Nothing could be found that matches your query."
 
 
 

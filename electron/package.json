@@ -1,18 +1,56 @@
 {
-  "name": "electron-chat",
+  "name": "webrunner",
   "version": "1.0.0",
-  "description": "Real-time Browser Automation Agent.",
+  "description": "WebRunner - Autonomous browser automation and file system agent.",
   "main": "src/main.js",
+  "author": "Raunaq",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "dist": "electron-builder --publish never"
   },
   "dependencies": {
+    "axios": "^1.15.0",
     "electron-store": "^11.0.2"
   },
   "devDependencies": {
-    "electron": "^29.0.0"
+    "electron": "^29.0.0",
+    "electron-builder": "^26.8.1"
   },
-  "author": "ElectronChat",
-  "license": "MIT"
+  "build": { 
+    "appId": "com.webrunner.app",
+    "productName": "WebRunner",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "backend/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities",
+      "icon": "assets/icon.icns"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
 }

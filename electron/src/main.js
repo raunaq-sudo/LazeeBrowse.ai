@@ -1,8 +1,39 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, powerSaveBlocker } = require("electron");
 const path = require("path");
+const { spawn } = require("child_process")
 
 let mainWindow;
+let backendProcess;
+let splash;
 
+function createSplash() {
+  splash = new BrowserWindow({
+    width: 400,
+    height: 300,
+    frame: false,
+    alwaysOnTop: true,
+    transparent: true,
+    resizable: false,
+    center: true,
+  });
+
+  splash.loadFile(path.join(__dirname, "../src/loading.html"));
+}
+const axios = require("axios");
+
+async function waitForBackend() {
+  for (let i = 0; i < 20; i++) {
+    try {
+      await axios.get("http://127.0.0.1:8000/health");
+      console.log("Backend ready");
+      return;
+    } catch {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  throw new Error("Backend failed to start");
+}
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -33,27 +64,68 @@ function createWindow() {
   }
 }
 
-// Window controls via IPC
-// ipcMain.on("window:minimize", () => mainWindow?.minimize());
-// ipcMain.on("window:maximize", () => {
-//   if (mainWindow?.isMaximized()) mainWindow.unmaximize();
-//   else mainWindow?.maximize();
-// });
-// ipcMain.on("window:close", () => mainWindow?.close());
+function getBackendPath() {
+  const isDev = !app.isPackaged;
 
-app.whenReady().then(() => {
-  createWindow();
+  if (isDev) {
+    return path.join(__dirname, "../backend/main/main"); // adjust if needed
+  } else {
+    return path.join(process.resourcesPath, "backend", "main", "main");
+  }
+}
+
+function startBackend() {
+  const backendPath = getBackendPath();
+
+  console.log("Starting backend from:", backendPath);
+
+  backendProcess = spawn(backendPath, [], {
+    stdio: "pipe"
+  });
+
+  backendProcess.stdout.on("data", (data) => {
+    console.log("BACKEND STDOUT:", data.toString());
+  });
+
+  backendProcess.stderr.on("data", (data) => {
+    console.error("BACKEND STDERR:", data.toString());
+  });
+
+  backendProcess.on("error", (err) => {
+    console.error("Failed to start backend:", err);
+  });
+
+  backendProcess.on("exit", (code) => {
+    console.log("Backend exited with code:", code);
+  });
+}
+
+app.whenReady().then(async () => {
+  createSplash();          // 👈 show loader
+  startBackend();          // 👈 start backend
+
+  try {
+    await waitForBackend();  // 👈 wait until ready
+
+    createWindow();          // 👈 load main UI
+
+    if (splash) {
+      splash.close();        // 👈 remove loader
+    }
+
+  } catch (err) {
+    console.error("Backend failed:", err);
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
   blockerId = powerSaveBlocker.start('prevent-display-sleep');
-
-  console.log('Power save blocker started:', blockerId);
-});
-
-app.on("window-all-closed", () => {
+  app.on("window-all-closed", () => {
   app.quit();
 });
+})
 
 
 ipcMain.handle("open-file", async (event, filePath) => {
@@ -79,4 +151,9 @@ ipcMain.handle('select-folder', async () => {
     if (result.canceled) return null;
 
     return result.filePaths[0]; // 👈 absolute path
+});
+
+
+app.on("will-quit", () => {
+  if (backendProcess) backendProcess.kill();
 });

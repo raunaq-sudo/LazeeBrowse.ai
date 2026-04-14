@@ -53,7 +53,6 @@
       <input type="text" id="llmApiKey" value="sk-*******************" autocomplete="off" />
       <label for="agentDir">Project directory</label>
       <input type="text" id="agentDir" readonly placeholder="Select directory" />
-      <button id="browseBtn">Browse</button>
     </div>
 
     <button class="connect-btn" id="connectBtn" onclick="connectToAgent()">
@@ -75,7 +74,7 @@
     <div class="side-panel left collapsed" id="logsPanel">
       <div class="panel-header">
         <span>Logs</span>
-        <button onclick="togglePanel('logsPanel')">⮜</button>
+        <button onclick="togglePanel('logsPanel')">(¬_¬)</button>
       </div>
       <div class="panel-content" id="logsContent"></div>
     </div>
@@ -92,7 +91,7 @@
           </svg>
         </div>
         <div class="agent-info">
-          <span class="agent-name">AI Agent</span>
+          <span class="agent-name">Agent</span>
           <span class="agent-status" id="agentStatus">Ready</span>
         </div>
       </div>
@@ -166,7 +165,7 @@
   <!-- RIGHT: FILE TREE -->
   <div class="side-panel right collapsed" id="filesPanel">
     <div class="panel-header">
-      <button onclick="togglePanel('filesPanel')">⮞</button>
+      <button onclick="togglePanel('filesPanel')">[dir]</button>
       <span>Files</span>
     </div>
     <div class="panel-content" id="filesContent"></div>
@@ -177,7 +176,7 @@
 
 <script src="app.js"></script>
 <script>
-document.getElementById("browseBtn").addEventListener("click", async () => {
+document.getElementById("agentDir").addEventListener("click", async () => {
     const path = await window.electronAPI.selectFolder();
 
     if (path) {
