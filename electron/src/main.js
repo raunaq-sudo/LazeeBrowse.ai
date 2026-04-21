@@ -64,16 +64,26 @@ function createWindow() {
   }
 }
 
+// os specific executable.
+const isDev = !app.isPackaged;
+
 function getBackendPath() {
-  const isDev = !app.isPackaged;
+  const basePath = isDev
+    ? path.join(__dirname, "../backend/main")
+    : path.join(process.resourcesPath, "backend", "main");
 
-  if (isDev) {
-    return path.join(__dirname, "../backend/main/main"); // adjust if needed
-  } else {
-    return path.join(process.resourcesPath, "backend", "main", "main");
+  let executableName = "main";
+
+  if (process.platform === "win32") {
+    executableName = "main.exe";
+  } else if (process.platform === "darwin") {
+    executableName = "main"; // or "main-macos" if you rename it
+  } else if (process.platform === "linux") {
+    executableName = "main"; // or "main-linux"
   }
-}
 
+  return path.join(basePath, executableName);
+}
 function startBackend() {
   const backendPath = getBackendPath();
 

@@ -98,4 +98,3 @@ npm start
 { "type": "pong" }
 ```
 
-s
