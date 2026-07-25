@@ -22,7 +22,7 @@ from typing import Optional
 import os
 from browser_session_handler import BrowserSession
 
-from config import get_models
+from config import get_models, get_model_list
 from prompts.deep_agent import prompt
 import db
 
@@ -33,7 +33,7 @@ project_dir = None
 
 agent_interrupted = False
 GOOGLE_CHROME_PATH = os.environ.get("GOOGLE_CHROME_PATH", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
+headless_mode = os.environ.get("HEADLESS", "false").lower() == "true"
 app = FastAPI(title="AI Agent WebSocket Server")
 
 app.add_middleware(
@@ -51,7 +51,9 @@ app.add_middleware(
 async def get_settings():
     return {
         "api_key": db.get_setting("api_key") or "",
+        "model_name": db.get_setting("model_name") or "deepseek-v4-flash",
         "project_dir": db.get_setting("project_dir") or "",
+        "headless": db.get_setting("headless") == "true",
     }
 
 @app.post("/api/settings")
@@ -59,9 +61,17 @@ async def save_settings(request: Request):
     body = await request.json()
     if "api_key" in body:
         db.set_setting("api_key", body["api_key"])
+    if "model_name" in body:
+        db.set_setting("model_name", body["model_name"])
     if "project_dir" in body:
         db.set_setting("project_dir", body["project_dir"])
+    if "headless" in body:
+        db.set_setting("headless", "true" if body["headless"] else "false")
     return {"ok": True}
+
+@app.get("/api/models")
+async def list_models():
+    return {"models": get_model_list()}
 
 # -------------------------------
 # DATA STRUCTURES
@@ -194,7 +204,7 @@ safe_connections: Dict[str, SafeWebSocket] = {}
 # -------------------------------
 # HELPER FUNCTIONS
 # -------------------------------
-async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
+async def request_user_input(message: str, safe_ws: SafeWebSocket, input_type: str = "text", options: list = None, fields: list = None) -> str:
     """
     Request input from user and wait for response.
     Returns the user's input as a string.
@@ -211,14 +221,21 @@ async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
     except:
         pass
     try:
-        # Send input request to client
-        success = await safe_ws.send({
+        # Send input request to client with UI metadata
+        payload = {
             "type": "form_input",
             "request_id": request_id,
             "role": "assistant",
             "content": message,
+            "input_type": input_type,
             "timestamp": datetime.now().isoformat(),
-        })
+        }
+        if options:
+            payload["options"] = options
+        if fields:
+            payload["fields"] = fields
+
+        success = await safe_ws.send(payload)
         
         if not success:
             return "WebSocket connection closed"
@@ -226,7 +243,6 @@ async def request_user_input(message: str, safe_ws: SafeWebSocket) -> str:
         # Wait for user response (with 5 minute timeout)
         try:
             user_response = await asyncio.wait_for(future, timeout=300.0)
-            # await log_chat(f"User response on request: {user_response}", safe_ws)
             await safe_ws.send({
                 "type": "agent_thinking",
                 "timestamp": datetime.now().isoformat(),
@@ -596,8 +612,8 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         
 
         # Create wrapper functions that use the safe WebSocket
-        async def request_input_wrapper(message: str) -> str:
-            return await request_user_input(message, safe_ws)
+        async def request_input_wrapper(message: str, input_type: str = "text", options: list = None, fields: list = None) -> str:
+            return await request_user_input(message, safe_ws, input_type=input_type, options=options, fields=fields)
         
         async def log_wrapper(message: str):
             await log_chat(message, safe_ws)
@@ -639,7 +655,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         async with async_playwright() as p:
             await log_wrapper("🚀 Launching browser...")
             launch_kwargs = {
-                "headless": HEADLESS,
+                "headless": headless_mode,
                 "args": [
                     "--disable-notifications",
                     "--disable-geolocation",
@@ -906,11 +922,12 @@ async def agent_session(websocket: WebSocket, session_id: str):
 
                 elif msg_type == "llmApiAuth":
                     api_key = data.get("api_key", "").strip()
+                    model_tag = data.get("model_name", "deepseek-v4-flash").strip()
                     try:
                         global llm
                         global llm_deterministic
-                        llm = await get_models(api_key)
-                        llm_deterministic = await get_models(api_key, temperature=0.1)
+                        llm = await get_models(api_key, model_tag=model_tag)
+                        llm_deterministic = await get_models(api_key, model_tag=model_tag, temperature=0.1)
                     except Exception as e:
                         print(f"[ERROR] {session_id}: {e}")
                         await safe_ws.send({
@@ -933,6 +950,11 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     print(f"[FOLDER PATH] {project_dir}")
                     project_dir = data.get("folder_path", "").strip()
                     print(f"Data : {data}")
+
+                elif msg_type == "headless":
+                    global headless_mode
+                    headless_mode = data.get("headless", False)
+                    print(f"[HEADLESS] {headless_mode}")
             except asyncio.TimeoutError:
                 continue
 

@@ -49,10 +49,19 @@
     <div class="form-group">
       <label for="serverInput">SERVER URL</label>
       <input type="text" id="serverInput" value="ws://localhost:8000" autocomplete="off" />
-      <label for="llmApiKey">DEEPSEEK API KEY</label>
-      <input type="text" id="llmApiKey" value="sk-*******************" autocomplete="off" />
+      <label for="modelName">MODEL</label>
+      <select id="modelName" autocomplete="off"></select>
+      <label for="llmApiKey">API KEY</label>
+      <input type="password" id="llmApiKey" value="" placeholder="Enter your API key" autocomplete="off" />
       <label for="agentDir">Project directory</label>
       <input type="text" id="agentDir" readonly placeholder="Select directory" />
+      <div class="toggle-row">
+        <label class="toggle-label">Show Browser</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="headlessToggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
     </div>
 
     <button class="connect-btn" id="connectBtn" onclick="connectToAgent()">

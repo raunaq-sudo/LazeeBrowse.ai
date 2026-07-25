@@ -26,6 +26,25 @@ function getRestBase() {
   return raw.replace(/^ws/, "http");
 }
 
+async function loadModels() {
+  try {
+    const base = getRestBase();
+    const res = await fetch(`${base}/api/models`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const select = document.getElementById("modelName");
+    select.innerHTML = "";
+    (data.models || []).forEach(m => {
+      const opt = document.createElement("option");
+      opt.value = m.tag;
+      opt.textContent = m.label;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.log("Could not load models:", e.message);
+  }
+}
+
 async function loadSettings() {
   try {
     const base = getRestBase();
@@ -34,26 +53,35 @@ async function loadSettings() {
     const data = await res.json();
     if (data.api_key) document.getElementById("llmApiKey").value = data.api_key;
     if (data.project_dir) document.getElementById("agentDir").value = data.project_dir;
+    if (data.model_name) {
+      const select = document.getElementById("modelName");
+      if (select.querySelector(`option[value="${data.model_name}"]`)) {
+        select.value = data.model_name;
+      }
+    }
+    if (data.headless !== undefined) {
+      document.getElementById("headlessToggle").checked = !data.headless;
+    }
   } catch (e) {
     console.log("Could not load saved settings:", e.message);
   }
 }
 
-async function saveSettings(api_key, project_dir) {
+async function saveSettings(api_key, model_name, project_dir, headless) {
   try {
     const base = getRestBase();
     await fetch(`${base}/api/settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_key, project_dir }),
+      body: JSON.stringify({ api_key, model_name, project_dir, headless }),
     });
   } catch (e) {
     console.log("Could not save settings:", e.message);
   }
 }
 
-// Load saved settings on startup
-loadSettings();
+// Load models and settings on startup
+loadModels().then(() => loadSettings());
 
 // ── CONNECTION ─────────────────────────────────
 
@@ -61,7 +89,9 @@ loadSettings();
 function connectToAgent() {
   const serverRaw = document.getElementById("serverInput").value.trim();
   const api_key = document.getElementById("llmApiKey").value.trim();
+  const model_name = document.getElementById("modelName").value;
   const folderPath = document.getElementById("agentDir").value.trim();
+  const headless = !document.getElementById("headlessToggle").checked;
   if (!serverRaw) return showError("Please enter a server URL.");
 
   // 🛑 Prevent duplicate connections
@@ -102,7 +132,8 @@ function connectToAgent() {
     updateBadge("connected", "Connected");
     ws.send(JSON.stringify({
       type:"llmApiAuth",
-      api_key:api_key
+      api_key:api_key,
+      model_name:model_name
     })
   )
     ws.send(JSON.stringify({
@@ -111,7 +142,12 @@ function connectToAgent() {
     
     }))
 
-    saveSettings(api_key, folderPath);
+    ws.send(JSON.stringify({
+      type: "headless",
+      headless: headless
+    }))
+
+    saveSettings(api_key, model_name, folderPath, headless);
   };
   
   setFormInputRequired(false, null)
@@ -166,11 +202,8 @@ function handleServerMessage(data) {
     case "form_input":
       setThinking(false);
       setFormInputRequired(true, data.request_id);
-      // Only render assistant messages here;
-      // user messages are rendered optimistically on send
-      if (data.role === "assistant") {
-        appendMessage("assistant", data.content, data.timestamp);
-      }
+      // Render the appropriate UI based on input_type
+      renderFormInput(data);
       break;
 
     case "agent_thinking":
@@ -280,6 +313,139 @@ function clearMessages() {
 function scrollToBottom() {
   const area = document.getElementById("messagesArea");
   area.scrollTop = area.scrollHeight;
+}
+
+// ── FORM INPUT RENDERING ────────────────────────
+function renderFormInput(data) {
+  const area = document.getElementById("messagesArea");
+  const empty = document.getElementById("emptyState");
+  if (empty) empty.remove();
+
+  const wrap = document.createElement("div");
+  wrap.className = "msg-wrap assistant";
+
+  const avatar = document.createElement("div");
+  avatar.className = "msg-avatar-icon";
+  avatar.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+    <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+  </svg>`;
+  wrap.appendChild(avatar);
+
+  const bubble = document.createElement("div");
+  bubble.className = "msg-bubble form-bubble";
+
+  const text = document.createElement("div");
+  text.className = "msg-text";
+  text.textContent = data.content;
+  bubble.appendChild(text);
+
+  const inputType = data.input_type || "text";
+
+  if (inputType === "confirmation") {
+    const btnRow = document.createElement("div");
+    btnRow.className = "form-btn-row";
+
+    const yesBtn = document.createElement("button");
+    yesBtn.className = "form-btn form-btn-yes";
+    yesBtn.textContent = "Yes";
+    yesBtn.onclick = () => submitFormResponse(data.request_id, "yes", wrap);
+
+    const noBtn = document.createElement("button");
+    noBtn.className = "form-btn form-btn-no";
+    noBtn.textContent = "No";
+    noBtn.onclick = () => submitFormResponse(data.request_id, "no", wrap);
+
+    btnRow.appendChild(yesBtn);
+    btnRow.appendChild(noBtn);
+    bubble.appendChild(btnRow);
+
+  } else if (inputType === "options") {
+    const optList = document.createElement("div");
+    optList.className = "form-options";
+
+    (data.options || []).forEach((opt, i) => {
+      const optBtn = document.createElement("button");
+      optBtn.className = "form-option-btn";
+      optBtn.textContent = opt;
+      optBtn.onclick = () => submitFormResponse(data.request_id, opt, wrap);
+      optList.appendChild(optBtn);
+    });
+    bubble.appendChild(optList);
+
+  } else if (inputType === "form") {
+    const form = document.createElement("div");
+    form.className = "form-fields";
+
+    (data.fields || []).forEach((field, i) => {
+      const group = document.createElement("div");
+      group.className = "form-field-group";
+
+      const label = document.createElement("label");
+      label.className = "form-field-label";
+      label.textContent = field.label;
+      group.appendChild(label);
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "form-field-input";
+      input.placeholder = field.placeholder || "";
+      input.value = field.value || "";
+      input.dataset.index = i;
+      group.appendChild(input);
+
+      form.appendChild(group);
+    });
+
+    const submitRow = document.createElement("div");
+    submitRow.className = "form-btn-row";
+
+    const submitBtn = document.createElement("button");
+    submitBtn.className = "form-btn form-btn-submit";
+    submitBtn.textContent = "Submit";
+    submitBtn.onclick = () => {
+      const inputs = form.querySelectorAll(".form-field-input");
+      const values = Array.from(inputs).map(inp => inp.value);
+      submitFormResponse(data.request_id, JSON.stringify(values), wrap);
+    };
+
+    submitRow.appendChild(submitBtn);
+    form.appendChild(submitRow);
+    bubble.appendChild(form);
+
+  } else {
+    // Free text — keep existing behavior (user types in main input)
+  }
+
+  const time = document.createElement("div");
+  time.className = "msg-time";
+  const ts = data.timestamp ? new Date(data.timestamp) : new Date();
+  time.textContent = ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  bubble.appendChild(time);
+
+  wrap.appendChild(bubble);
+  area.appendChild(wrap);
+  scrollToBottom();
+}
+
+function submitFormResponse(requestId, content, msgWrap) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // Render the user's response as a message
+  appendMessage("user", content, new Date().toISOString());
+
+  // Disable the form buttons
+  const btns = msgWrap.querySelectorAll("button");
+  btns.forEach(btn => {
+    btn.disabled = true;
+    btn.classList.add("disabled");
+  });
+
+  // Send response
+  ws.send(JSON.stringify({ type: "form_response", content, request_id: requestId }));
+
+  // Reset form input state
+  setFormInputRequired(false, null);
 }
 
 // ── SEND ───────────────────────────────────────

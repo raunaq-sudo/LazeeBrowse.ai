@@ -211,8 +211,9 @@ class BrowserSession:
 
     async def type_text(self, selector: str, text: str, page_name: Optional[str] = None):
         page = await self.get_page(page_name)
-        await page.fill(selector, "")
-        await page.type(selector, text)
+        el = page.locator(selector)
+        await el.click()
+        await el.fill(text)
         return f"[TYPE] {text}"
 
     async def scroll(self, amount: int = 1000, page_name: Optional[str] = None):

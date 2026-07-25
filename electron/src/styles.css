@@ -164,6 +164,38 @@ html, body {
 }
 .form-group input::placeholder { color: var(--text-placeholder); }
 .form-group input:focus { border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-dim); }
+.form-group select {
+  width: 100%; background: var(--bg-base); border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm); padding: 9px 13px;
+  color: var(--text-primary); font-family: var(--font-sans); font-size: 13px;
+  outline: none; transition: var(--transition);
+  appearance: auto; cursor: pointer;
+}
+.form-group select:focus { border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-dim); }
+
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 12px; padding: 8px 0;
+}
+.toggle-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--text-secondary); text-transform: uppercase;
+}
+.toggle-switch {
+  position: relative; display: inline-block; width: 40px; height: 22px; cursor: pointer;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--border-mid); border-radius: 22px; transition: var(--transition);
+}
+.toggle-slider::before {
+  content: ""; position: absolute; left: 3px; bottom: 3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--bg-elevated); transition: var(--transition);
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
 
 .connect-btn {
   width: 100%; background: var(--accent); color: #fff; border: none;
@@ -511,3 +543,118 @@ kbd {
   line-height: 1; display: flex; align-items: center;
 }
 .attachment-remove:hover { color: var(--danger); }
+
+/* ── FORM INPUT UI ─────────────────────────── */
+.form-bubble {
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.form-btn-row {
+  display: flex; gap: 8px; margin-top: 4px;
+}
+
+.form-btn {
+  padding: 8px 20px;
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.form-btn:hover:not(.disabled) {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.form-btn:disabled, .form-btn.disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.form-btn-yes {
+  background: rgba(74,124,89,0.08);
+  border-color: rgba(74,124,89,0.25);
+  color: var(--success);
+}
+.form-btn-yes:hover:not(.disabled) {
+  background: rgba(74,124,89,0.15);
+  border-color: var(--success);
+}
+
+.form-btn-no {
+  background: rgba(184,64,64,0.06);
+  border-color: rgba(184,64,64,0.2);
+  color: var(--danger);
+}
+.form-btn-no:hover:not(.disabled) {
+  background: rgba(184,64,64,0.12);
+  border-color: var(--danger);
+}
+
+.form-btn-submit {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.form-btn-submit:hover:not(.disabled) {
+  background: var(--accent-soft);
+}
+
+/* Options */
+.form-options {
+  display: flex; flex-direction: column; gap: 6px; margin-top: 4px;
+}
+
+.form-option-btn {
+  padding: 10px 14px;
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 13px; text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.form-option-btn:hover:not(.disabled) {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.form-option-btn:disabled, .form-option-btn.disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Form fields */
+.form-fields {
+  display: flex; flex-direction: column; gap: 10px; margin-top: 4px;
+}
+
+.form-field-group {
+  display: flex; flex-direction: column; gap: 4px;
+}
+
+.form-field-label {
+  font-size: 12px; font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.form-field-input {
+  padding: 8px 12px;
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: var(--transition);
+}
+.form-field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+.form-field-input::placeholder { color: var(--text-placeholder); }

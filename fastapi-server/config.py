@@ -2,61 +2,67 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-# GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# from langchain_google_genai import ChatGoogleGenerativeAI
-# llm_sys_prmpt_gen_ = ChatGoogleGenerativeAI(
-#     model="gemini-3.1-pro-preview",
-#     temperature=0.4,  # Gemini 3.0+ defaults to 1.0
-#     api_key=os.getenv("GEMINI_API_KEY"),
-#     # other params...
-# )
-# llm_ = ChatGoogleGenerativeAI(
-#     model="gemini-3-flash-preview",
-#     temperature=0.4,  # Gemini 3.0+ defaults to 1.0
-#     api_key=os.getenv("GEMINI_API_KEY"),
-#     # other params...
-# )
-
 from langchain_deepseek import ChatDeepSeek
 
-# llm = ChatDeepSeek(
-#     model="deepseek-chat",
-#     temperature=0.4,
-#     max_tokens=None,
-#     timeout=None,
-#     max_retries=2,
-#     api_key = os.getenv("DEEPSEEK_API_KEY")
-    
-# )
+# Model registry: tag -> {model_id, provider, label}
+MODEL_REGISTRY = {
+    "deepseek-v4-flash": {
+        "model_id": "deepseek-v4-flash",
+        "provider": "deepseek",
+        "label": "DeepSeek V4 Flash"
+    },
 
-# llm_sys_prmpt_gen = ChatDeepSeek(
-#     model="deepseek-chat",
-#     temperature=0.4,
-#     max_tokens=None,
-#     timeout=None,
-#     max_retries=2,
-#     api_key = os.getenv("DEEPSEEK_API_KEY")
-# )
+    "gemini-2.5-flash": {
+        "model_id": "gemini-2.5-flash",
+        "provider": "google",
+        "label": "Gemini 2.5 Flash"
+    },
+    "gemini-2.5-pro": {
+        "model_id": "gemini-2.5-pro",
+        "provider": "google",
+        "label": "Gemini 2.5 Pro"
+    },
+}
 
-async def get_models(api_key, temperature=0.5):
-    model =  ChatDeepSeek(
-        model="deepseek-chat",
-        temperature=temperature,
-        max_tokens=None,
-        timeout=None,
-        max_retries=2,
-        api_key = api_key
-    
-    )
+
+def get_model_list():
+    """Return all available models for the frontend dropdown."""
+    return [
+        {"tag": tag, "label": info["label"], "provider": info["provider"]}
+        for tag, info in MODEL_REGISTRY.items()
+    ]
+
+
+async def get_models(api_key, model_tag="deepseek-v4-flash", temperature=0.5):
+    info = MODEL_REGISTRY.get(model_tag)
+    if not info:
+        raise ValueError(f"Unknown model tag: {model_tag}")
+
+    model_id = info["model_id"]
+    provider = info["provider"]
+
+    if provider == "deepseek":
+        llm = ChatDeepSeek(
+            model=model_id,
+            temperature=temperature,
+            max_tokens=None,
+            timeout=None,
+            max_retries=2,
+            api_key=api_key,
+        )
+    elif provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        llm = ChatGoogleGenerativeAI(
+            model=model_id,
+            temperature=temperature,
+            api_key=api_key,
+        )
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
     try:
-        await model.ainvoke([
-                {
-                    "role": "user",
-                    "content": "Hello world"
-                }
-            ])
-        return model
+        await llm.ainvoke([{"role": "user", "content": "Hello world"}])
+        return llm
     except Exception as e:
         print(str(e))
         return None
