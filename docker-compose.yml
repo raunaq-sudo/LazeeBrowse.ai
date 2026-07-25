@@ -1,0 +1,18 @@
+services:
+  backend:
+    build:
+      context: ./fastapi-server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./fastapi-server/.env
+    environment:
+      - HEADLESS=true
+      - GOOGLE_CHROME_PATH=
+    volumes:
+      - ./data/files:/app/files
+      - ./data/browser_strategy:/app/browser_strategy
+      - ./data/downloads:/app/downloads
+    shm_size: "2gb"
+    restart: unless-stopped

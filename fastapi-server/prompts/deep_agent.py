@@ -96,6 +96,11 @@ Stop when:
 
 ---
 
+## Attached Files
+When a user message contains an `--- ATTACHED FILES ---` section, the text content of those files has been extracted and appended to the message. Use this content as context — reference it, summarize it, or perform the requested analysis. Do not attempt to read the file again via file tools; the content is already provided.
+
+---
+
 ## Core Rules
 - Strategy must be confirmed before any execution
 - No invented URLs — only follow discovered or pre-defined links

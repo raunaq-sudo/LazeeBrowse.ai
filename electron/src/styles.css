@@ -458,3 +458,56 @@ kbd {
 #browseBtn:active {
     transform: scale(0.97);
 }
+
+/* ── FILE ATTACHMENTS ───────────────────────── */
+.input-wrapper {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+}
+.input-actions-left {
+  display: flex;
+  align-items: center;
+  padding: 0 0 0 4px;
+  flex-shrink: 0;
+}
+.attach-btn {
+  width: 32px; height: 32px;
+  background: none; border: none;
+  border-radius: 8px; cursor: pointer;
+  color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center;
+  transition: var(--transition);
+}
+.attach-btn:hover { background: var(--accent-dim); color: var(--accent); }
+
+.attachment-bar {
+  display: none;
+  padding: 6px 12px 0;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.attachment-bar.visible { display: flex; }
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--accent-dim);
+  border: 1px solid var(--border-accent);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font-size: 11px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-remove {
+  background: none; border: none;
+  color: var(--text-muted); cursor: pointer;
+  font-size: 11px; padding: 0 2px;
+  line-height: 1; display: flex; align-items: center;
+}
+.attachment-remove:hover { color: var(--danger); }

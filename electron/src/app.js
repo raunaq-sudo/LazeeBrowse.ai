@@ -19,6 +19,42 @@ function getSessionId() {
   return id;
 }
 
+// ── SETTINGS PERSISTENCE ───────────────────────
+
+function getRestBase() {
+  const raw = document.getElementById("serverInput").value.trim().replace(/\/$/, "");
+  return raw.replace(/^ws/, "http");
+}
+
+async function loadSettings() {
+  try {
+    const base = getRestBase();
+    const res = await fetch(`${base}/api/settings`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.api_key) document.getElementById("llmApiKey").value = data.api_key;
+    if (data.project_dir) document.getElementById("agentDir").value = data.project_dir;
+  } catch (e) {
+    console.log("Could not load saved settings:", e.message);
+  }
+}
+
+async function saveSettings(api_key, project_dir) {
+  try {
+    const base = getRestBase();
+    await fetch(`${base}/api/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key, project_dir }),
+    });
+  } catch (e) {
+    console.log("Could not save settings:", e.message);
+  }
+}
+
+// Load saved settings on startup
+loadSettings();
+
 // ── CONNECTION ─────────────────────────────────
 
 
@@ -74,6 +110,8 @@ function connectToAgent() {
       folder_path:folderPath
     
     }))
+
+    saveSettings(api_key, folderPath);
   };
   
   setFormInputRequired(false, null)
@@ -245,10 +283,17 @@ function scrollToBottom() {
 }
 
 // ── SEND ───────────────────────────────────────
-function sendMessage() {
+async function sendMessage() {
   const input = document.getElementById("messageInput");
   const content = input.value.trim();
-  if (!content || !ws || ws.readyState !== WebSocket.OPEN || isThinking) return;
+  if ((!content && !pendingAttachments.length) || !ws || ws.readyState !== WebSocket.OPEN || isThinking) return;
+
+  // Send attachments first
+  if (pendingAttachments.length) {
+    await sendAttachments();
+  }
+
+  if (!content) return;
 
   // Render user message immediately
   appendMessage("user", content, new Date().toISOString());
@@ -517,4 +562,99 @@ function renderFiles(data) {
   Object.keys(tree).forEach(root =>
     container.appendChild(createNode(root, tree[root]))
   );
+}
+
+// ── FILE ATTACHMENTS ────────────────────────────
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const ALLOWED_EXTENSIONS = [
+  "pdf","txt","csv","json","xml","html","md",
+  "doc","docx","xls","xlsx","ppt","pptx",
+  "log","yaml","yml","toml","cfg","conf","ini"
+];
+let pendingAttachments = [];
+
+function handleFileSelect(event) {
+  const files = Array.from(event.target.files);
+  if (!files.length) return;
+
+  files.forEach(file => {
+    const ext = file.name.split(".").pop().toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      addLog(`Skipped "${file.name}": file type not allowed`);
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      addLog(`Skipped "${file.name}": exceeds 10MB limit`);
+      return;
+    }
+    pendingAttachments.push(file);
+  });
+
+  renderAttachmentBar();
+  event.target.value = "";
+}
+
+function renderAttachmentBar() {
+  const bar = document.getElementById("attachmentBar");
+  bar.innerHTML = "";
+
+  if (!pendingAttachments.length) {
+    bar.classList.remove("visible");
+    return;
+  }
+  bar.classList.add("visible");
+
+  pendingAttachments.forEach((file, i) => {
+    const chip = document.createElement("span");
+    chip.className = "attachment-chip";
+    chip.textContent = file.name;
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "attachment-remove";
+    removeBtn.innerHTML = "&#x2715;";
+    removeBtn.onclick = () => {
+      pendingAttachments.splice(i, 1);
+      renderAttachmentBar();
+    };
+    chip.appendChild(removeBtn);
+    bar.appendChild(chip);
+  });
+}
+
+function removeAttachment(index) {
+  pendingAttachments.splice(index, 1);
+  renderAttachmentBar();
+}
+
+async function sendAttachments() {
+  if (!pendingAttachments.length || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  for (const file of pendingAttachments) {
+    const base64 = await readFileAsBase64(file);
+    ws.send(JSON.stringify({
+      type: "file_upload",
+      filename: file.name,
+      size: file.size,
+      mime: file.type || "application/octet-stream",
+      data: base64
+    }));
+    addLog(`Uploaded: ${file.name} (${formatFileSize(file.size)})`);
+  }
+
+  pendingAttachments = [];
+  renderAttachmentBar();
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }

@@ -1366,6 +1366,7 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
 
     browser_tools = [
         open_url,
+        open_new_tab,
         click,
         type_text,
         scroll,
@@ -1373,7 +1374,6 @@ def build_tools(session, request_user_input, log_chat, misc_tools = False, only_
         get_title,
         get_ui_schema,
         get_visible_modal_schema,
-        # scrape_url,
         get_all_links,
         get_all_headings,
         submit_form,

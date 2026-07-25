@@ -1,5 +1,6 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from typing import Dict, List, Set
 import json
 from datetime import datetime
@@ -23,6 +24,7 @@ from browser_session_handler import BrowserSession
 
 from config import get_models
 from prompts.deep_agent import prompt
+import db
 
 llm = None
 llm_deterministic = None
@@ -30,7 +32,8 @@ llm_deterministic = None
 project_dir = None
 
 agent_interrupted = False
-GOOGLE_CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+GOOGLE_CHROME_PATH = os.environ.get("GOOGLE_CHROME_PATH", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
 app = FastAPI(title="AI Agent WebSocket Server")
 
 app.add_middleware(
@@ -40,6 +43,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# -------------------------------
+# SETTINGS (SQLite persistence)
+# -------------------------------
+@app.get("/api/settings")
+async def get_settings():
+    return {
+        "api_key": db.get_setting("api_key") or "",
+        "project_dir": db.get_setting("project_dir") or "",
+    }
+
+@app.post("/api/settings")
+async def save_settings(request: Request):
+    body = await request.json()
+    if "api_key" in body:
+        db.set_setting("api_key", body["api_key"])
+    if "project_dir" in body:
+        db.set_setting("project_dir", body["project_dir"])
+    return {"ok": True}
 
 # -------------------------------
 # DATA STRUCTURES
@@ -74,6 +96,43 @@ pending_inputs: Dict[str, asyncio.Future] = {}
 # Track active WebSocket connections and their status
 active_connections: Dict[str, WebSocket] = {}
 connection_tasks: Dict[str, Set[asyncio.Task]] = {}
+
+# Extracted file content waiting to be included in next message
+pending_file_contents: Dict[str, List[dict]] = {}
+
+def extract_file_content(file_path: str, filename: str) -> str:
+    """Extract text content from an uploaded file."""
+    ext = os.path.splitext(filename)[1].lower()
+
+    try:
+        if ext == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            pages = [page.extract_text() or "" for page in reader.pages]
+            return "\n\n".join(pages)
+
+        elif ext in (".csv", ".tsv"):
+            import csv
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+            return "\n".join([",".join(row) for row in rows[:500]])
+
+        elif ext in (".json", ".jsonl"):
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            return content[:50000]
+
+        elif ext in (".txt", ".md", ".log", ".xml", ".html",
+                      ".yaml", ".yml", ".toml", ".cfg", ".conf", ".ini"):
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read()[:50000]
+
+        else:
+            return f"[Binary file: {filename} — cannot extract text]"
+
+    except Exception as e:
+        return f"[Error reading {filename}: {e}]"
 
 # -------------------------------
 # SAFE WEBSOCKET SENDER
@@ -210,6 +269,20 @@ def resolve_user_path(relative_path: str):
 
 import sys
 import os
+import shutil as _shutil
+
+def sync_skills_to_project():
+    """Copy built-in skills from the codebase to the user's project files directory."""
+    skills_source = os.path.join(os.path.dirname(__file__), "skills")
+    skills_dest = os.path.join(get_user_files_dir(), "skills", "user")
+    if not os.path.isdir(skills_source):
+        return
+    os.makedirs(skills_dest, exist_ok=True)
+    for skill_name in os.listdir(skills_source):
+        src = os.path.join(skills_source, skill_name)
+        dst = os.path.join(skills_dest, skill_name)
+        if os.path.isdir(src):
+            _shutil.copytree(src, dst, dirs_exist_ok=True)
 
 def get_resource_path(relative_path: str) -> str:
     """
@@ -497,8 +570,21 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             return
         
         
+        # Build user message with any pending file contents
+        file_context = ""
+        if session_id in pending_file_contents and pending_file_contents[session_id]:
+            parts = []
+            for fc in pending_file_contents[session_id]:
+                parts.append(f"--- File: {fc['filename']} ---\n{fc['content']}")
+            file_context = "\n\n".join(parts)
+            pending_file_contents[session_id] = []
+
+        full_message = user_message
+        if file_context:
+            full_message = f"{user_message}\n\n--- ATTACHED FILES ---\n{file_context}"
+
         # Add user message
-        user_message_obj = {"role": "user", "content": user_message}
+        user_message_obj = {"role": "user", "content": full_message}
         chat_manager.update_chat_history(user_message_obj, session_id)
         chat_history = chat_manager.get_chat_history(session_id)
         
@@ -552,17 +638,20 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         # -------------------------------
         async with async_playwright() as p:
             await log_wrapper("🚀 Launching browser...")
-            browser = await p.chromium.launch(
-                headless=False, 
-                args=[
+            launch_kwargs = {
+                "headless": HEADLESS,
+                "args": [
                     "--disable-notifications",
                     "--disable-geolocation",
                     "--disable-infobars",
-                    "--kiosk"
-                ], 
-                downloads_path=resolve_user_path("downloads"),
-                executable_path=GOOGLE_CHROME_PATH
-            )
+                    "--disable-gpu",
+                    "--no-sandbox",
+                ],
+                "downloads_path": resolve_user_path("downloads"),
+            }
+            if GOOGLE_CHROME_PATH:
+                launch_kwargs["executable_path"] = GOOGLE_CHROME_PATH
+            browser = await p.chromium.launch(**launch_kwargs)
             
             context = await browser.new_context(permissions=[])
             # page = await context.new_page()
@@ -583,18 +672,13 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             )
             
             await log_chat(f"Project path: {project_dir}", safe_ws)
+            sync_skills_to_project()
             agent = create_deep_agent(
                 model=llm,
                 tools=tools,
                 backend = FilesystemBackend(root_dir=os.path.join(project_dir,"files"), virtual_mode=True),
-                system_prompt=prompt#load_prompt("deep_agent.md"),
-                # interrupt_on={
-                #     "delete_file":True,
-                #     "delete_directory":True
-                # },
-                # checkpointer=checkpointer
-                
-                
+                system_prompt=prompt,
+                skills=["/skills/user/"],
             )
             await file_tree_data(safe_ws)
             await log_wrapper("🤖 Agent created. Running browser automation...")
@@ -762,6 +846,54 @@ async def agent_session(websocket: WebSocket, session_id: str):
                         "event": "history_cleared",
                         "timestamp": datetime.now().isoformat(),
                     })
+
+                elif msg_type == "file_upload":
+                    import base64 as _b64
+                    filename = data.get("filename", "").strip()
+                    file_data = data.get("data", "")
+                    if not filename or not file_data:
+                        await safe_ws.send({
+                            "type": "log",
+                            "content": "File upload failed: missing filename or data",
+                            "timestamp": datetime.now().isoformat(),
+                        })
+                        continue
+
+                    # Sanitize filename
+                    safe_name = os.path.basename(filename)
+                    upload_dir = os.path.join(project_dir or "", "files", "uploads")
+                    os.makedirs(upload_dir, exist_ok=True)
+                    dest = os.path.join(upload_dir, safe_name)
+
+                    # Prevent overwriting — append counter if exists
+                    base, ext = os.path.splitext(dest)
+                    counter = 1
+                    while os.path.exists(dest):
+                        dest = f"{base}_{counter}{ext}"
+                        counter += 1
+
+                    try:
+                        raw_bytes = _b64.b64decode(file_data)
+                        with open(dest, "wb") as f:
+                            f.write(raw_bytes)
+
+                        # Extract text content for agent context
+                        content = extract_file_content(dest, os.path.basename(dest))
+                        if session_id not in pending_file_contents:
+                            pending_file_contents[session_id] = []
+                        pending_file_contents[session_id].append({
+                            "filename": os.path.basename(dest),
+                            "content": content,
+                        })
+
+                        await log_chat(f"File uploaded: {os.path.basename(dest)} ({len(raw_bytes)} bytes)", safe_ws)
+                        await file_tree_data(safe_ws)
+                    except Exception as e:
+                        await safe_ws.send({
+                            "type": "log",
+                            "content": f"File upload error: {e}",
+                            "timestamp": datetime.now().isoformat(),
+                        })
 
                 elif msg_type == "ping":
                     await safe_ws.send({
