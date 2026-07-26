@@ -1,29 +1,41 @@
 // ─────────────────────────────────────────
-//  Agent Chat — WebSocket Client
+//  AI Browser — WebSocket Client
 // ─────────────────────────────────────────
 
 let ws = null;
 let sessionId = null;
 let isThinking = false;
-let isFormInputRequired = false;
-let formRequestId = null;
 let isConnecting = false;
+let browserView = null;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_RECONNECT_DELAY = 1000;
 
-// Generate or retrieve a persistent session ID
+// ── SESSION ID ──────────────────────────────────
 function getSessionId() {
-  let id = localStorage.getItem("agent_session_id");
+  let id = localStorage.getItem("ai_browser_session_id");
   if (!id) {
     id = crypto.randomUUID();
-    localStorage.setItem("agent_session_id", id);
+    localStorage.setItem("ai_browser_session_id", id);
   }
   return id;
 }
 
-// ── SETTINGS PERSISTENCE ───────────────────────
-
+// ── SETTINGS ────────────────────────────────────
 function getRestBase() {
   const raw = document.getElementById("serverInput").value.trim().replace(/\/$/, "");
   return raw.replace(/^ws/, "http");
+}
+
+let savedProjectDir = "";
+
+async function selectFolder() {
+  const folder = await window.electronAPI.selectFolder();
+  if (folder) {
+    document.getElementById("projectDir").value = folder;
+    savedProjectDir = folder;
+  }
 }
 
 async function loadModels() {
@@ -52,61 +64,83 @@ async function loadSettings() {
     if (!res.ok) return;
     const data = await res.json();
     if (data.api_key) document.getElementById("llmApiKey").value = data.api_key;
-    if (data.project_dir) document.getElementById("agentDir").value = data.project_dir;
     if (data.model_name) {
       const select = document.getElementById("modelName");
       if (select.querySelector(`option[value="${data.model_name}"]`)) {
         select.value = data.model_name;
       }
     }
-    if (data.headless !== undefined) {
-      document.getElementById("headlessToggle").checked = !data.headless;
+    if (data.project_dir) {
+      document.getElementById("projectDir").value = data.project_dir;
+      savedProjectDir = data.project_dir;
     }
   } catch (e) {
     console.log("Could not load saved settings:", e.message);
   }
 }
 
-async function saveSettings(api_key, model_name, project_dir, headless) {
+async function saveSettings(api_key, model_name, project_dir) {
   try {
     const base = getRestBase();
     await fetch(`${base}/api/settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_key, model_name, project_dir, headless }),
+      body: JSON.stringify({ api_key, model_name, project_dir }),
     });
   } catch (e) {
     console.log("Could not save settings:", e.message);
   }
 }
 
-// Load models and settings on startup
 loadModels().then(() => loadSettings());
 
-// ── CONNECTION ─────────────────────────────────
+// ── WEBVIEW SETUP ───────────────────────────────
+function getBrowserView() {
+  if (!browserView) {
+    browserView = document.getElementById("browserView");
+  }
+  return browserView;
+}
 
+async function webviewExecute(js) {
+  const wv = getBrowserView();
+  if (!wv) return { error: "Webview not initialized" };
+  try {
+    return await wv.executeJavaScript(js);
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+// ── JS ESCAPE HELPER ─────────────────────────────
+function escapeJsString(str) {
+  if (typeof str !== "string") return "";
+  return str
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    .replace(/</g, "\\x3c")
+    .replace(/>/g, "\\x3e");
+}
+
+// ── CONNECTION ──────────────────────────────────
+let projectDirPath = "";
 
 function connectToAgent() {
   const serverRaw = document.getElementById("serverInput").value.trim();
   const api_key = document.getElementById("llmApiKey").value.trim();
   const model_name = document.getElementById("modelName").value;
-  const folderPath = document.getElementById("agentDir").value.trim();
-  const headless = !document.getElementById("headlessToggle").checked;
+  const project_dir = document.getElementById("projectDir").value.trim();
   if (!serverRaw) return showError("Please enter a server URL.");
+  if (!project_dir) return showError("Please select a project directory.");
 
-  // 🛑 Prevent duplicate connections
   if (ws) {
-    if (ws.readyState === WebSocket.OPEN) {
-      console.log("Already connected");
-      return;
-    }
-
-    if (ws.readyState === WebSocket.CONNECTING) {
-      console.log("Connection already in progress");
-      return;
-    }
+    if (ws.readyState === WebSocket.OPEN) return;
+    if (ws.readyState === WebSocket.CONNECTING) return;
   }
-
   if (isConnecting) return;
   isConnecting = true;
 
@@ -116,7 +150,7 @@ function connectToAgent() {
 
   document.getElementById("connectBtn").disabled = true;
   showError("");
-  updateBadge("connecting", "Connecting…");
+  updateBadge("connecting", "Connecting...");
 
   try {
     ws = new WebSocket(url);
@@ -129,81 +163,80 @@ function connectToAgent() {
 
   ws.onopen = () => {
     isConnecting = false;
+    reconnectAttempts = 0;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     updateBadge("connected", "Connected");
-    ws.send(JSON.stringify({
-      type:"llmApiAuth",
-      api_key:api_key,
-      model_name:model_name
-    })
-  )
-    ws.send(JSON.stringify({
-      type: "folderPath",
-      folder_path:folderPath
-    
-    }))
 
-    ws.send(JSON.stringify({
-      type: "headless",
-      headless: headless
-    }))
+    const project_dir = document.getElementById("projectDir").value.trim();
+    const folder_path = project_dir || savedProjectDir;
 
-    saveSettings(api_key, model_name, folderPath, headless);
+    // Send auth
+    ws.send(JSON.stringify({
+      type: "llmApiAuth",
+      api_key: api_key,
+      model_name: model_name,
+    }));
+
+    // Tell backend this is a browser-control session
+    ws.send(JSON.stringify({
+      type: "session_mode",
+      mode: "browser_control",
+    }));
+
+    // Send project directory
+    if (folder_path) {
+      ws.send(JSON.stringify({
+        type: "folderPath",
+        folder_path: folder_path,
+      }));
+    }
+
+    saveSettings(api_key, model_name, folder_path);
+    projectDirPath = folder_path;
+    hideConnectOverlay();
+    loadFileTree().then(() => updateSidebarTogglePosition());
+    startHeartbeat();
   };
-  
-  setFormInputRequired(false, null)
 
   ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    handleServerMessage(data);
+    try {
+      const data = JSON.parse(event.data);
+      handleServerMessage(data);
+    } catch (e) {
+      console.error("Failed to parse WebSocket message:", e);
+    }
   };
 
   ws.onerror = () => {
     isConnecting = false;
     updateBadge("error", "Error");
-    showError("Could not connect. Is the server running? Please Check you Api key.");
+    showError("Could not connect. Is the server running?");
     document.getElementById("connectBtn").disabled = false;
   };
 
   ws.onclose = () => {
     isConnecting = false;
-    console.log("WebSocket closed");
+    stopHeartbeat();
     updateBadge("", "Disconnected");
     setThinking(false);
-    setInputEnabled(false);
-    disconnect()
-    // 🧠 Optional: auto-reconnect with delay (SAFE)
-    // setTimeout(() => {
-    //   console.log("Reconnecting...");
-    //   connectToAgent();
-    // }, 2000);
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      const delay = BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts);
+      reconnectAttempts++;
+      updateBadge("connecting", `Reconnecting (${reconnectAttempts})...`);
+      reconnectTimer = setTimeout(() => connectToAgent(), delay);
+    } else {
+      showConnectOverlay();
+    }
   };
 }
+
+// ── MESSAGE HANDLER ─────────────────────────────
 function handleServerMessage(data) {
   switch (data.type) {
     case "system":
       if (data.event === "connected") {
-        switchToChat();
         updateBadge("connected", "Connected");
-      } else if (data.event === "history_cleared") {
-        clearMessages();
       }
-      break;
-
-    case "message":
-      setThinking(false);
-      setFormInputRequired(false, null);
-      // Only render assistant messages here;
-      // user messages are rendered optimistically on send
-      if (data.role === "assistant") {
-        appendMessage("assistant", data.content, data.timestamp);
-      }
-      break;
-    
-    case "form_input":
-      setThinking(false);
-      setFormInputRequired(true, data.request_id);
-      // Render the appropriate UI based on input_type
-      renderFormInput(data);
       break;
 
     case "agent_thinking":
@@ -213,295 +246,278 @@ function handleServerMessage(data) {
     case "log":
       addLog(data.content);
       break;
-    
-    case "files":
-      renderFiles(data.content);
-      break;
-    
-    case "processing_request":
-      disableSendBtn(true)
-      break;
-    
-    case "processing_request_completed":
-      disableSendBtn(false)
+
+    case "browser_command":
+      handleBrowserCommand(data);
       break;
 
-    
+    case "message":
+      setThinking(false);
+      addLog(`AI: ${data.content}`);
+      expandLogPanel();
+      break;
+
+    case "form_input":
+      handleFormInput(data);
+      break;
+
     case "pong":
       break;
 
     case "llmApiAuthFailed":
-      showError("Invalid Api Key. Please check your Api key and try again.");
-      ws = null
+      showError("Invalid API Key.");
+      isConnecting = false;
+      document.getElementById("connectBtn").disabled = false;
+      break;
+
+    case "error":
+      addLog(`Error: ${data.content}`);
+      setThinking(false);
+      expandLogPanel();
       break;
   }
 }
 
-// ── SCREEN SWITCH ──────────────────────────────
-function switchToChat() {
-  document.getElementById("connectScreen").classList.add("hidden");
-  document.getElementById("chatScreen").classList.remove("hidden");
-  setInputEnabled(true);
-  document.getElementById("messageInput").focus();
-}
+// ── BROWSER COMMAND HANDLER (webview) ───────────
+async function handleBrowserCommand(data) {
+  const { command, params, request_id } = data;
+  let result;
 
-function disconnect() {
-  if (ws) { ws.close(); ws = null; }
-  setThinking(false);
-  document.getElementById("chatScreen").classList.add("hidden");
-  document.getElementById("connectScreen").classList.remove("hidden");
-  document.getElementById("connectBtn").disabled = false;
-  updateBadge("", "Disconnected");
-}
-
-// ── MESSAGES ───────────────────────────────────
-function appendMessage(role, content, timestamp) {
-  const area = document.getElementById("messagesArea");
-
-  // Hide empty state once first message arrives
-  const empty = document.getElementById("emptyState");
-  if (empty) empty.remove();
-
-  const wrap = document.createElement("div");
-  wrap.className = `msg-wrap ${role}`;
-
-  if (role === "assistant") {
-    const avatar = document.createElement("div");
-    avatar.className = "msg-avatar-icon";
-    avatar.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
-      <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-    </svg>`;
-    wrap.appendChild(avatar);
+  try {
+    switch (command) {
+      case "navigate": {
+        const wv = getBrowserView();
+        wv.src = params.url;
+        await new Promise((resolve) => {
+          wv.addEventListener("did-finish-load", resolve, { once: true });
+          setTimeout(resolve, 15000);
+        });
+        result = { ok: true, url: wv.getURL() };
+        break;
+      }
+      case "get_url":
+        result = getBrowserView().getURL();
+        break;
+      case "get_title":
+        result = getBrowserView().getTitle();
+        break;
+      case "click":
+        result = await webviewExecute(`
+          (() => {
+            const el = document.querySelector('${escapeJsString(params.selector)}');
+            if (!el) return { error: 'Element not found: ${escapeJsString(params.selector)}' };
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.click();
+            return { ok: true };
+          })()
+        `);
+        break;
+      case "type":
+        result = await webviewExecute(`
+          (() => {
+            const el = document.querySelector('${escapeJsString(params.selector)}');
+            if (!el) return { error: 'Element not found: ${escapeJsString(params.selector)}' };
+            el.focus();
+            el.value = '${escapeJsString(params.text)}';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return { ok: true };
+          })()
+        `);
+        break;
+      case "scroll":
+        result = await webviewExecute(`window.scrollBy(0, ${params.amount})`);
+        result = { ok: true };
+        break;
+      case "get_text":
+        result = await webviewExecute(`
+          (() => {
+            const clone = document.body.cloneNode(true);
+            clone.querySelectorAll('script, style, noscript').forEach(el => el.remove());
+            return clone.innerText;
+          })()
+        `);
+        break;
+      case "get_links":
+        result = await webviewExecute(`
+          Array.from(document.querySelectorAll('a[href]')).map(a => ({
+            text: a.innerText.trim().slice(0, 100),
+            href: a.href
+          })).filter(a => a.href && a.href.startsWith('http'))
+        `);
+        break;
+      case "get_headings":
+        result = await webviewExecute(`
+          Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+            .map(h => ({ tag: h.tagName.toLowerCase(), text: h.innerText.trim() }))
+        `);
+        break;
+      case "get_schema":
+        result = await webviewExecute(`
+          (() => {
+            const mode = '${params.mode || 'visible'}';
+            const elements = document.querySelectorAll('input, textarea, select, button, a[href]');
+            return Array.from(elements).map(el => {
+              const rect = el.getBoundingClientRect();
+              const isVisible = rect.width > 0 && rect.height > 0 &&
+                window.getComputedStyle(el).visibility !== 'hidden' &&
+                window.getComputedStyle(el).display !== 'none';
+              if (mode !== 'full' && !isVisible) return null;
+              let selector = '';
+              if (el.id) selector = '#' + el.id;
+              else if (el.name) selector = '[name="' + el.name + '"]';
+              else {
+                let path = [];
+                let current = el;
+                while (current && current !== document.body) {
+                  let seg = current.tagName.toLowerCase();
+                  if (current.id) { seg = '#' + current.id; path.unshift(seg); break; }
+                  if (current.className && typeof current.className === 'string') {
+                    const cls = current.className.split(/\\s+/).filter(Boolean).slice(0, 2).join('.');
+                    if (cls) seg += '.' + cls;
+                  }
+                  path.unshift(seg);
+                  current = current.parentElement;
+                }
+                selector = path.join(' > ');
+              }
+              return {
+                tag: el.tagName.toLowerCase(),
+                selector: selector,
+                text: (el.innerText || el.placeholder || '').trim().slice(0, 100),
+                type: el.type || null,
+                href: el.href || null,
+                visible: isVisible,
+                rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height }
+              };
+            }).filter(Boolean);
+          })()
+        `);
+        break;
+      case "get_page_content":
+        result = await webviewExecute(`
+          (() => {
+            const clone = document.body.cloneNode(true);
+            clone.querySelectorAll('script, style, noscript, nav, footer, aside').forEach(el => el.remove());
+            return clone.innerHTML;
+          })()
+        `);
+        break;
+      case "submit_form":
+        result = await webviewExecute(`
+          (() => {
+            const active = document.activeElement;
+            if (active && active.form) { active.form.submit(); return { ok: true }; }
+            const event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true });
+            document.activeElement.dispatchEvent(event);
+            return { ok: true };
+          })()
+        `);
+        break;
+      case "press_key":
+        result = await webviewExecute(`
+          (() => {
+            const keyMap = {
+              'Enter': 13, 'Tab': 9, 'Escape': 27, 'Backspace': 8, 'Delete': 46,
+              'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
+              ' ': 32, 'Home': 36, 'End': 35, 'PageUp': 33, 'PageDown': 34
+            };
+            const keyCode = keyMap['${escapeJsString(params.key)}'] || 0;
+            const event = new KeyboardEvent('keydown', {
+              key: '${escapeJsString(params.key)}',
+              code: '${escapeJsString(params.key)}',
+              keyCode: keyCode,
+              bubbles: true
+            });
+            document.activeElement.dispatchEvent(event);
+            return { ok: true };
+          })()
+        `);
+        break;
+      case "go_back":
+        getBrowserView().goBack();
+        result = { ok: true };
+        break;
+      case "go_forward":
+        getBrowserView().goForward();
+        result = { ok: true };
+        break;
+      case "screenshot":
+        result = { error: "Screenshot not supported in webview mode" };
+        break;
+      default:
+        result = { error: `Unknown command: ${command}` };
+    }
+  } catch (e) {
+    result = { error: e.message };
   }
 
-  const bubble = document.createElement("div");
-  bubble.className = "msg-bubble";
-
-  const text = document.createElement("div");
-  text.className = "msg-text";
-  text.textContent = content;
-
-  const time = document.createElement("div");
-  time.className = "msg-time";
-  const ts = timestamp ? new Date(timestamp) : new Date();
-  time.textContent = ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-  bubble.appendChild(text);
-  bubble.appendChild(time);
-  wrap.appendChild(bubble);
-  area.appendChild(wrap);
-
-  scrollToBottom();
-}
-
-function clearMessages() {
-  const area = document.getElementById("messagesArea");
-  area.innerHTML = `
-    <div class="empty-state" id="emptyState">
-      <div class="empty-icon">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1"/>
-          <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-        </svg>
-      </div>
-      <p class="empty-title">Conversation cleared</p>
-      <p class="empty-sub">Send a message to start fresh.</p>
-    </div>`;
-}
-
-function scrollToBottom() {
-  const area = document.getElementById("messagesArea");
-  area.scrollTop = area.scrollHeight;
-}
-
-// ── FORM INPUT RENDERING ────────────────────────
-function renderFormInput(data) {
-  const area = document.getElementById("messagesArea");
-  const empty = document.getElementById("emptyState");
-  if (empty) empty.remove();
-
-  const wrap = document.createElement("div");
-  wrap.className = "msg-wrap assistant";
-
-  const avatar = document.createElement("div");
-  avatar.className = "msg-avatar-icon";
-  avatar.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
-    <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-  </svg>`;
-  wrap.appendChild(avatar);
-
-  const bubble = document.createElement("div");
-  bubble.className = "msg-bubble form-bubble";
-
-  const text = document.createElement("div");
-  text.className = "msg-text";
-  text.textContent = data.content;
-  bubble.appendChild(text);
-
-  const inputType = data.input_type || "text";
-
-  if (inputType === "confirmation") {
-    const btnRow = document.createElement("div");
-    btnRow.className = "form-btn-row";
-
-    const yesBtn = document.createElement("button");
-    yesBtn.className = "form-btn form-btn-yes";
-    yesBtn.textContent = "Yes";
-    yesBtn.onclick = () => submitFormResponse(data.request_id, "yes", wrap);
-
-    const noBtn = document.createElement("button");
-    noBtn.className = "form-btn form-btn-no";
-    noBtn.textContent = "No";
-    noBtn.onclick = () => submitFormResponse(data.request_id, "no", wrap);
-
-    btnRow.appendChild(yesBtn);
-    btnRow.appendChild(noBtn);
-    bubble.appendChild(btnRow);
-
-  } else if (inputType === "options") {
-    const optList = document.createElement("div");
-    optList.className = "form-options";
-
-    (data.options || []).forEach((opt, i) => {
-      const optBtn = document.createElement("button");
-      optBtn.className = "form-option-btn";
-      optBtn.textContent = opt;
-      optBtn.onclick = () => submitFormResponse(data.request_id, opt, wrap);
-      optList.appendChild(optBtn);
-    });
-    bubble.appendChild(optList);
-
-  } else if (inputType === "form") {
-    const form = document.createElement("div");
-    form.className = "form-fields";
-
-    (data.fields || []).forEach((field, i) => {
-      const group = document.createElement("div");
-      group.className = "form-field-group";
-
-      const label = document.createElement("label");
-      label.className = "form-field-label";
-      label.textContent = field.label;
-      group.appendChild(label);
-
-      const input = document.createElement("input");
-      input.type = "text";
-      input.className = "form-field-input";
-      input.placeholder = field.placeholder || "";
-      input.value = field.value || "";
-      input.dataset.index = i;
-      group.appendChild(input);
-
-      form.appendChild(group);
-    });
-
-    const submitRow = document.createElement("div");
-    submitRow.className = "form-btn-row";
-
-    const submitBtn = document.createElement("button");
-    submitBtn.className = "form-btn form-btn-submit";
-    submitBtn.textContent = "Submit";
-    submitBtn.onclick = () => {
-      const inputs = form.querySelectorAll(".form-field-input");
-      const values = Array.from(inputs).map(inp => inp.value);
-      submitFormResponse(data.request_id, JSON.stringify(values), wrap);
-    };
-
-    submitRow.appendChild(submitBtn);
-    form.appendChild(submitRow);
-    bubble.appendChild(form);
-
-  } else {
-    // Free text — keep existing behavior (user types in main input)
+  // Send result back to backend
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: "browser_result",
+      request_id: request_id,
+      result: result,
+    }));
   }
-
-  const time = document.createElement("div");
-  time.className = "msg-time";
-  const ts = data.timestamp ? new Date(data.timestamp) : new Date();
-  time.textContent = ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  bubble.appendChild(time);
-
-  wrap.appendChild(bubble);
-  area.appendChild(wrap);
-  scrollToBottom();
 }
 
-function submitFormResponse(requestId, content, msgWrap) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+// ── URL BAR ─────────────────────────────────────
+document.getElementById("urlInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    const url = e.target.value.trim();
+    if (url) {
+      getBrowserView().src = url;
+    }
+  }
+});
 
-  // Render the user's response as a message
-  appendMessage("user", content, new Date().toISOString());
+// ── NAV BUTTONS ─────────────────────────────────
+document.getElementById("backBtn").addEventListener("click", () => {
+  getBrowserView().goBack();
+});
 
-  // Disable the form buttons
-  const btns = msgWrap.querySelectorAll("button");
-  btns.forEach(btn => {
-    btn.disabled = true;
-    btn.classList.add("disabled");
-  });
+document.getElementById("forwardBtn").addEventListener("click", () => {
+  getBrowserView().goForward();
+});
 
-  // Send response
-  ws.send(JSON.stringify({ type: "form_response", content, request_id: requestId }));
+document.getElementById("refreshBtn").addEventListener("click", () => {
+  getBrowserView().reload();
+});
 
-  // Reset form input state
-  setFormInputRequired(false, null);
-}
+// ── INSTRUCTION INPUT ───────────────────────────
+document.getElementById("instructionInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendInstruction();
+  }
+});
 
-// ── SEND ───────────────────────────────────────
-async function sendMessage() {
-  const input = document.getElementById("messageInput");
+document.getElementById("instructionInput").addEventListener("input", (e) => {
+  const input = e.target;
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 80) + "px";
+  const len = input.value.length;
+  document.getElementById("charCount").textContent = len > 1800 ? `${len}/2000` : "";
+});
+
+async function sendInstruction() {
+  const input = document.getElementById("instructionInput");
   const content = input.value.trim();
-  if ((!content && !pendingAttachments.length) || !ws || ws.readyState !== WebSocket.OPEN || isThinking) return;
+  if (!content || !ws || ws.readyState !== WebSocket.OPEN || isThinking) return;
 
-  // Send attachments first
-  if (pendingAttachments.length) {
-    await sendAttachments();
-  }
-
-  if (!content) return;
-
-  // Render user message immediately
-  appendMessage("user", content, new Date().toISOString());
-  const messageType = isFormInputRequired ? "form_response" : "message"
-  if (formRequestId !== null) { 
-    ws.send(JSON.stringify({ type: messageType, content, request_id: formRequestId }));
-  }else{
-    ws.send(JSON.stringify({ type: messageType, content }));
-  }
+  const filesToSend = [...attachedFiles];
+  addLog(`You: ${content}${filesToSend.length ? ` [${filesToSend.length} file(s) attached]` : ""}`);
+  ws.send(JSON.stringify({ type: "message", content, attached_files: filesToSend }));
 
   input.value = "";
   input.style.height = "auto";
   document.getElementById("charCount").textContent = "";
-  input.focus();
+  attachedFiles = [];
+  renderAttachedFiles();
 }
 
-function handleKeydown(e) {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
-}
-
-function handleInput() {
-  const input = document.getElementById("messageInput");
-
-  // Auto-resize textarea
-  input.style.height = "auto";
-  input.style.height = Math.min(input.scrollHeight, 160) + "px";
-
-  // Char count
-  const len = input.value.length;
-  document.getElementById("charCount").textContent = len > 3500 ? `${len}/4000` : "";
-}
-
-// ── CLEAR HISTORY ──────────────────────────────
-function clearHistory() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: "clear_history" }));
-}
-
-// ── THINKING STATE ─────────────────────────────
+// ── UI HELPERS ──────────────────────────────────
 function setThinking(thinking) {
   isThinking = thinking;
   const bar = document.getElementById("thinkingBar");
@@ -509,31 +525,9 @@ function setThinking(thinking) {
   const sendBtn = document.getElementById("sendBtn");
 
   bar.classList.toggle("visible", thinking);
-  status.textContent = thinking ? "Thinking…" : "Ready";
+  status.textContent = thinking ? "AI is working..." : "Ready";
   status.classList.toggle("thinking", thinking);
   sendBtn.disabled = thinking;
-
-  if (thinking) scrollToBottom();
-}
-
-function setFormInputRequired(required, request_id) {
-  isFormInputRequired = required;
-  formRequestId = request_id;
-
-}
-
-// -- Processing state
-
-function disableSendBtn(bool){
-  document.getElementById("sendBtn").disabled = bool;
-
-}
-
-// ── UI HELPERS ─────────────────────────────────
-function setInputEnabled(enabled) {
-  document.getElementById("messageInput").disabled = !enabled;
-  document.getElementById("sendBtn").disabled = !enabled;
-  document.getElementById("clearBtn").disabled = !enabled;
 }
 
 function updateBadge(state, text) {
@@ -546,281 +540,396 @@ function showError(msg) {
   document.getElementById("connectError").textContent = msg;
 }
 
-// ── HEARTBEAT ─────────────────────────────────
-setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "ping" }));
-  }
-}, 30000);
+// ── FORM INPUT MODAL ─────────────────────────────
+let currentFormRequest = null;
 
-function togglePanel(id) {
-  const panel = document.getElementById(id);
-  panel.classList.toggle("collapsed");
+function handleFormInput(data) {
+  const { request_id, content, input_type, options, fields } = data;
+  currentFormRequest = { request_id, input_type };
+
+  const overlay = document.getElementById("formModal");
+  const header = document.getElementById("formModalHeader");
+  const body = document.getElementById("formModalBody");
+  const submitBtn = document.getElementById("formModalSubmit");
+  const cancelBtn = document.getElementById("formModalCancel");
+
+  header.textContent = content || "AI needs input";
+  body.innerHTML = "";
+
+  if (input_type === "confirmation") {
+    body.innerHTML = `
+      <div class="confirm-btns">
+        <button class="yes-btn" onclick="submitFormResponse('yes')">Yes</button>
+        <button class="no-btn" onclick="submitFormResponse('no')">No</button>
+      </div>
+    `;
+    submitBtn.classList.add("hidden");
+    cancelBtn.classList.add("hidden");
+  } else if (input_type === "options" && options && options.length > 0) {
+    options.forEach((opt, idx) => {
+      const btn = document.createElement("button");
+      btn.className = "option-btn";
+      btn.textContent = `${idx + 1}. ${opt}`;
+      btn.onclick = () => submitFormResponse(opt);
+      body.appendChild(btn);
+    });
+    submitBtn.classList.add("hidden");
+    cancelBtn.classList.remove("hidden");
+  } else if (input_type === "form" && fields && fields.length > 0) {
+    fields.forEach((field, idx) => {
+      const label = document.createElement("label");
+      label.style.display = "block";
+      label.style.fontSize = "10px";
+      label.style.fontWeight = "600";
+      label.style.color = "var(--text-secondary)";
+      label.style.marginBottom = "4px";
+      label.textContent = field.label || field.placeholder || `Field ${idx + 1}`;
+      body.appendChild(label);
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "form-field-input";
+      input.dataset.index = idx;
+      input.placeholder = field.placeholder || "";
+      input.value = field.value || "";
+      body.appendChild(input);
+    });
+    submitBtn.classList.remove("hidden");
+    cancelBtn.classList.remove("hidden");
+  } else {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = "formModalTextInput";
+    input.placeholder = "Type your response...";
+    body.appendChild(input);
+    submitBtn.classList.remove("hidden");
+    cancelBtn.classList.remove("hidden");
+    setTimeout(() => input.focus(), 50);
+  }
+
+  submitBtn.onclick = () => {
+    if (input_type === "form") {
+      const inputs = body.querySelectorAll(".form-field-input");
+      const values = Array.from(inputs).map(i => i.value);
+      submitFormResponse(JSON.stringify(values));
+    } else {
+      const input = body.querySelector("#formModalTextInput");
+      submitFormResponse(input ? input.value : "");
+    }
+  };
+
+  cancelBtn.onclick = () => submitFormResponse("");
+
+  overlay.classList.remove("hidden");
 }
+
+function submitFormResponse(response) {
+  if (!currentFormRequest) return;
+  const { request_id } = currentFormRequest;
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: "form_response",
+      request_id: request_id,
+      content: response,
+    }));
+  }
+
+  document.getElementById("formModal").classList.add("hidden");
+  currentFormRequest = null;
+}
+
+function hideConnectOverlay() {
+  document.getElementById("connectOverlay").classList.add("hidden");
+}
+
+function showConnectOverlay() {
+  document.getElementById("connectOverlay").classList.remove("hidden");
+}
+
+function toggleLogPanel() {
+  const panel = document.getElementById("logPanel");
+  const btn = document.getElementById("logToggle");
+  const wasCollapsed = panel.classList.contains("collapsed");
+  if (wasCollapsed) {
+    panel.classList.remove("collapsed");
+    panel.style.height = "";
+    btn.textContent = "v";
+  } else {
+    panel.classList.add("collapsed");
+    panel.style.height = "";
+    btn.textContent = "^";
+  }
+}
+
+function expandLogPanel() {
+  const panel = document.getElementById("logPanel");
+  const btn = document.getElementById("logToggle");
+  panel.classList.remove("collapsed");
+  panel.style.height = "50vh";
+  btn.textContent = "v";
+}
+
+// ── LOG RESIZE HANDLE ──────────────────────────
+(function initLogResize() {
+  const handle = document.getElementById("logResizeHandle");
+  const panel = document.getElementById("logPanel");
+  if (!handle || !panel) return;
+
+  let startY = 0;
+  let startH = 0;
+  let dragging = false;
+
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = panel.getBoundingClientRect().height;
+    handle.classList.add("active");
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const delta = startY - e.clientY;
+    const newH = Math.max(28, Math.min(window.innerHeight * 0.85, startH + delta));
+    panel.style.height = newH + "px";
+    panel.classList.remove("collapsed");
+    document.getElementById("logToggle").textContent = "v";
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("active");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  });
+})();
 
 function addLog(message) {
-  const logs = document.getElementById("logsContent");
+  const logs = document.getElementById("logContent");
   if (!logs) return;
-
   const line = document.createElement("div");
+  line.className = "log-line";
   line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
   logs.appendChild(line);
-
   logs.scrollTop = logs.scrollHeight;
-}
 
-// function renderFiles(data) {
-//   const container = document.getElementById("filesContent");
-//   container.innerHTML = "";
-
-//   if (!data || !data.files) return;
-
-//   // STEP 1: Build tree from flat paths
-//   const tree = {};
-
-//   data.files.forEach(file => {
-//     const parts = file.project_path.split("/"); // ["files", "folder", "a.txt"]
-//     let current = tree;
-
-//     parts.forEach((part, index) => {
-//       if (!current[part]) {
-//         current[part] = {
-//           __children: {},
-//           __isFile: index === parts.length - 1,
-//           __path: file.path,
-//           __project_path: file.project_path
-//         };
-//       }
-//       current = current[part].__children;
-//     });
-//   });
-
-//   // STEP 2: Render tree
-//   function createNode(name, node) {
-//     const wrapper = document.createElement("div");
-
-//     const item = document.createElement("div");
-//     item.textContent = name;
-//     item.style.cursor = "pointer";
-
-//     // Styling
-//     item.style.padding = "2px 4px";
-//     item.style.borderRadius = "4px";
-
-//     if (node.__isFile) {
-//       item.style.color = "#c96a2a"; // accent
-//       item.onclick = async () => {
-//         console.log(node)
-//         const res = await window.electronAPI.openFile(node.__path);
-
-//         if (!res.success) {
-//           console.error("Open failed:", res.error);
-//         }
-//       };
-//     } else {
-//       item.style.fontWeight = "600";
-//     }
-
-//     wrapper.appendChild(item);
-
-//     // Children (folder)
-//     const childrenKeys = Object.keys(node.__children);
-//     if (childrenKeys.length > 0) {
-//       const childWrap = document.createElement("div");
-//       childWrap.style.paddingLeft = "12px";
-//       childWrap.style.display = "none";
-
-//       item.onclick = () => {
-//         childWrap.style.display =
-//           childWrap.style.display === "none" ? "block" : "none";
-//       };
-
-//       childrenKeys.forEach(childName => {
-//         childWrap.appendChild(
-//           createNode(childName, node.__children[childName])
-//         );
-//       });
-
-//       wrapper.appendChild(childWrap);
-//     }
-
-//     return wrapper;
-//   }
-
-//   // STEP 3: Render root
-//   Object.keys(tree).forEach(rootKey => {
-//     container.appendChild(createNode(rootKey, tree[rootKey]));
-//   });
-// }
-
-
-function renderFiles(data) {
-  const container = document.getElementById("filesContent");
-  container.innerHTML = "";
-
-  if (!data || !data.nodes) return;
-
-  const tree = {};
-
-  data.nodes.forEach(node => {
-    const parts = node.project_path.split("/");
-    let current = tree;
-
-    parts.forEach((part, index) => {
-      if (!current[part]) {
-        current[part] = {
-          __children: {},
-          __type: index === parts.length - 1 ? node.type : "folder",
-          __path: node.path
-        };
-      }
-      current = current[part].__children;
-    });
-  });
-
-  function createNode(name, node) {
-    const wrapper = document.createElement("div");
-
-    const item = document.createElement("div");
-    item.style.cursor = "pointer";
-    item.style.padding = "2px 4px";
-    item.style.borderRadius = "4px";
-
-    const isFile = node.__type === "file";
-
-    item.textContent = isFile ? "📄 " + name : "📁 " + name;
-
-    if (isFile) {
-      item.style.color = "#c96a2a";
-
-      item.onclick = async () => {
-        await window.electronAPI.openFile(node.__path);
-      };
-
-    } else {
-      item.style.fontWeight = "600";
-    }
-
-    wrapper.appendChild(item);
-
-    const childrenKeys = Object.keys(node.__children);
-
-    if (childrenKeys.length > 0) {
-      const childWrap = document.createElement("div");
-      childWrap.style.paddingLeft = "12px";
-      childWrap.style.display = "none";
-
-      item.onclick = () => {
-        childWrap.style.display =
-          childWrap.style.display === "none" ? "block" : "none";
-      };
-
-      childrenKeys.forEach(child =>
-        childWrap.appendChild(createNode(child, node.__children[child]))
-      );
-
-      wrapper.appendChild(childWrap);
-    }
-
-    return wrapper;
+  while (logs.children.length > 100) {
+    logs.removeChild(logs.firstChild);
   }
-
-  Object.keys(tree).forEach(root =>
-    container.appendChild(createNode(root, tree[root]))
-  );
 }
 
-// ── FILE ATTACHMENTS ────────────────────────────
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const ALLOWED_EXTENSIONS = [
-  "pdf","txt","csv","json","xml","html","md",
-  "doc","docx","xls","xlsx","ppt","pptx",
-  "log","yaml","yml","toml","cfg","conf","ini"
-];
-let pendingAttachments = [];
+// ── HEARTBEAT ──────────────────────────────────
+let heartbeatInterval = null;
 
-function handleFileSelect(event) {
-  const files = Array.from(event.target.files);
-  if (!files.length) return;
-
-  files.forEach(file => {
-    const ext = file.name.split(".").pop().toLowerCase();
-    if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      addLog(`Skipped "${file.name}": file type not allowed`);
-      return;
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatInterval = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "ping" }));
+    } else {
+      stopHeartbeat();
     }
-    if (file.size > MAX_FILE_SIZE) {
-      addLog(`Skipped "${file.name}": exceeds 10MB limit`);
-      return;
-    }
-    pendingAttachments.push(file);
-  });
-
-  renderAttachmentBar();
-  event.target.value = "";
+  }, 30000);
 }
 
-function renderAttachmentBar() {
-  const bar = document.getElementById("attachmentBar");
-  bar.innerHTML = "";
+function stopHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+}
 
-  if (!pendingAttachments.length) {
-    bar.classList.remove("visible");
+// ── FILE TREE ──────────────────────────────────
+let fileTreeData = [];
+
+async function loadFileTree() {
+  if (!savedProjectDir) return;
+  try {
+    fileTreeData = await window.electronAPI.scanDirectory(savedProjectDir);
+    renderFileTree();
+  } catch (e) {
+    console.log("Could not load file tree:", e.message);
+  }
+}
+
+function renderFileTree() {
+  const container = document.getElementById("fileTree");
+  if (!container) return;
+  container.innerHTML = "";
+  if (fileTreeData.length === 0) {
+    container.innerHTML = '<div class="tree-item" style="color:var(--text-muted);cursor:default">No files</div>';
     return;
   }
-  bar.classList.add("visible");
+  fileTreeData.forEach(entry => renderTreeNode(container, entry, 0));
+}
 
-  pendingAttachments.forEach((file, i) => {
-    const chip = document.createElement("span");
-    chip.className = "attachment-chip";
-    chip.textContent = file.name;
+function renderTreeNode(parent, entry, depth) {
+  const item = document.createElement("div");
+  item.className = `tree-item ${entry.type}`;
+  item.style.paddingLeft = (10 + depth * 12) + "px";
+
+  const icon = document.createElement("span");
+  icon.className = "tree-icon";
+  icon.textContent = entry.type === "dir" ? "\u25B6" : getFileIcon(entry.name);
+
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = entry.name;
+  name.title = entry.path;
+
+  item.appendChild(icon);
+  item.appendChild(name);
+  parent.appendChild(item);
+
+  if (entry.type === "file") {
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      attachFileFromTree(entry);
+    });
+  }
+
+  if (entry.type === "dir" && entry.children) {
+    let expanded = false;
+    const childContainer = document.createElement("div");
+    childContainer.className = "tree-children";
+    childContainer.style.display = "none";
+    parent.appendChild(childContainer);
+
+    entry.children.forEach(child => renderTreeNode(childContainer, child, depth + 1));
+
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      expanded = !expanded;
+      childContainer.style.display = expanded ? "block" : "none";
+      icon.textContent = expanded ? "\u25BC" : "\u25B6";
+    });
+  }
+}
+
+function getFileIcon(name) {
+  const ext = name.split(".").pop().toLowerCase();
+  const icons = {
+    js: "JS", ts: "TS", py: "PY", html: "<>", css: "#",
+    json: "{}", md: "M", txt: "T", pdf: "PD",
+    png: "I", jpg: "I", jpeg: "I", gif: "I", svg: "I",
+    zip: "Z", tar: "Z", gz: "Z",
+  };
+  return icons[ext] || "\u25A1";
+}
+
+function attachFileFromTree(entry) {
+  const relPath = entry.path;
+  const name = entry.name;
+  if (attachedFiles.some(f => f.path === relPath)) return;
+  attachedFiles.push({ name, path: relPath });
+  renderAttachedFiles();
+}
+
+// ── FILE ATTACHMENT ─────────────────────────────
+let attachedFiles = [];
+
+function renderAttachedFiles() {
+  const bar = document.getElementById("attachedFilesBar");
+  if (!bar) return;
+  bar.innerHTML = "";
+  bar.classList.toggle("has-files", attachedFiles.length > 0);
+
+  attachedFiles.forEach((file, idx) => {
+    const chip = document.createElement("div");
+    chip.className = "attached-file-chip";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "chip-name";
+    nameSpan.textContent = file.name;
+    nameSpan.title = file.path;
+
     const removeBtn = document.createElement("button");
-    removeBtn.className = "attachment-remove";
-    removeBtn.innerHTML = "&#x2715;";
-    removeBtn.onclick = () => {
-      pendingAttachments.splice(i, 1);
-      renderAttachmentBar();
-    };
+    removeBtn.className = "chip-remove";
+    removeBtn.textContent = "\u00D7";
+    removeBtn.addEventListener("click", () => {
+      attachedFiles.splice(idx, 1);
+      renderAttachedFiles();
+    });
+
+    chip.appendChild(nameSpan);
     chip.appendChild(removeBtn);
     bar.appendChild(chip);
   });
 }
 
-function removeAttachment(index) {
-  pendingAttachments.splice(index, 1);
-  renderAttachmentBar();
-}
+async function pickFilesForAttachment() {
+  const files = await window.electronAPI.selectFiles(savedProjectDir || undefined);
+  if (!files || files.length === 0) return;
 
-async function sendAttachments() {
-  if (!pendingAttachments.length || !ws || ws.readyState !== WebSocket.OPEN) return;
-
-  for (const file of pendingAttachments) {
-    const base64 = await readFileAsBase64(file);
-    ws.send(JSON.stringify({
-      type: "file_upload",
-      filename: file.name,
-      size: file.size,
-      mime: file.type || "application/octet-stream",
-      data: base64
-    }));
-    addLog(`Uploaded: ${file.name} (${formatFileSize(file.size)})`);
-  }
-
-  pendingAttachments = [];
-  renderAttachmentBar();
-}
-
-function readFileAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+  const base = savedProjectDir || "";
+  files.forEach(fullPath => {
+    let relPath = fullPath;
+    if (base && fullPath.startsWith(base)) {
+      relPath = fullPath.slice(base.length).replace(/^\//, "");
+    }
+    const name = fullPath.split("/").pop();
+    if (!attachedFiles.some(f => f.path === relPath)) {
+      attachedFiles.push({ name, path: relPath });
+    }
   });
+  renderAttachedFiles();
 }
 
-function formatFileSize(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+// ── SIDEBAR TOGGLE ─────────────────────────────
+function toggleSidebar() {
+  const sidebar = document.getElementById("fileSidebar");
+  const btn = document.getElementById("sidebarToggle");
+  const collapsed = sidebar.classList.toggle("collapsed");
+  btn.classList.toggle("collapsed", collapsed);
+  updateSidebarTogglePosition();
 }
+
+function updateSidebarTogglePosition() {
+  const sidebar = document.getElementById("fileSidebar");
+  const btn = document.getElementById("sidebarToggle");
+  if (!sidebar || !btn) return;
+  const w = sidebar.classList.contains("collapsed") ? 0 : sidebar.getBoundingClientRect().width;
+  btn.style.left = w + "px";
+}
+
+// ── SIDEBAR RESIZE ─────────────────────────────
+(function initSidebarResize() {
+  const handle = document.getElementById("sidebarResizeHandle");
+  const sidebar = document.getElementById("fileSidebar");
+  if (!handle || !sidebar) return;
+
+  let startX = 0;
+  let startW = 0;
+  let dragging = false;
+
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    dragging = true;
+    startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width;
+    handle.classList.add("active");
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const delta = e.clientX - startX;
+    const newW = Math.max(0, Math.min(400, startW + delta));
+    sidebar.style.width = newW + "px";
+    if (newW > 0) sidebar.classList.remove("collapsed");
+    updateSidebarTogglePosition();
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("active");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  });
+})();
