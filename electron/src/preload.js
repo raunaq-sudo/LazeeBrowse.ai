@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
   selectFolder: () => ipcRenderer.invoke("select-folder"),
   selectFiles: (defaultPath) => ipcRenderer.invoke("select-files", defaultPath),
   scanDirectory: (dirPath) => ipcRenderer.invoke("scan-directory", dirPath),
+  deleteEntry: (basePath, relPath) => ipcRenderer.invoke("delete-entry", basePath, relPath),
 });

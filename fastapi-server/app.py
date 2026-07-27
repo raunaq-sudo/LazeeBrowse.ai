@@ -7,6 +7,7 @@ from datetime import datetime
 import uuid
 import asyncio
 import os
+import re
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
@@ -247,23 +248,30 @@ def clean_up_response(response):
 
     def extract_tool_calls(obj):
         calls = []
-        if hasattr(obj, "tool_calls") and obj.tool_calls:
-            for c in obj.tool_calls:
-                calls.append(sanitize_tool_call(c))
-        if hasattr(obj, "invalid_tool_calls") and obj.invalid_tool_calls:
-            for c in obj.invalid_tool_calls:
-                calls.append(sanitize_tool_call(c))
-        if hasattr(obj, "additional_kwargs") and isinstance(obj.additional_kwargs, dict):
-            for c in obj.additional_kwargs.get("tool_calls", []):
-                calls.append(sanitize_tool_call(c))
+        try:
+            tc = getattr(obj, "tool_calls", None) or []
+            for c in tc: calls.append(sanitize_tool_call(c))
+        except Exception: pass
+        try:
+            itc = getattr(obj, "invalid_tool_calls", None) or []
+            for c in itc: calls.append(sanitize_tool_call(c))
+        except Exception: pass
+        try:
+            ak = getattr(obj, "additional_kwargs", None)
+            if isinstance(ak, dict):
+                for c in ak.get("tool_calls", []): calls.append(sanitize_tool_call(c))
+        except Exception: pass
         if isinstance(obj, dict):
-            for c in obj.get("tool_calls", []):
-                calls.append(sanitize_tool_call(c))
+            for c in obj.get("tool_calls", []): calls.append(sanitize_tool_call(c))
         return calls
 
     def sanitize_tool_call(call):
-        name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
-        raw_args = (call.get("args") or call.get("arguments")) if isinstance(call, dict) else (getattr(call, "args", None) or getattr(call, "arguments", None))
+        if isinstance(call, dict):
+            name = call.get("name")
+            raw_args = call.get("args") or call.get("arguments")
+        else:
+            name = getattr(call, "name", None)
+            raw_args = getattr(call, "args", None) or getattr(call, "arguments", None)
         if isinstance(raw_args, dict): args = raw_args
         elif isinstance(raw_args, str):
             try: args = json.loads(raw_args)
@@ -271,13 +279,72 @@ def clean_up_response(response):
         else: args = {}
         return {"name": name, "args": args}
 
+    def get_msg_type(msg):
+        try: return getattr(msg, "type", None) or (msg.get("type") if isinstance(msg, dict) else None) or ""
+        except Exception: return ""
+
+    def get_msg_content(msg):
+        try: return getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else None)
+        except Exception: return None
+
+    def is_tool_result_noise(text):
+        if not text: return True
+        stripped = text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"): return True
+        if stripped.startswith("[") and stripped.endswith("]"): return True
+        if stripped.startswith('"') and stripped.endswith('"') and len(stripped) < 200: return True
+        if stripped in ("OK", "ok", "Done", "done", "Error", "error", "None", "null"): return True
+        json_ratio = sum(1 for c in stripped if c in '{}[]":') / max(len(stripped), 1)
+        if json_ratio > 0.15 and len(stripped) > 100: return True
+        if stripped.startswith('{"') and '"url"' in stripped[:200]: return True
+        if stripped.startswith('[{"') and '"title"' in stripped[:200]: return True
+        return False
+
+    def is_tool_message(msg):
+        return get_msg_type(msg) == "tool"
+
+    def is_human_message(msg):
+        return get_msg_type(msg) == "human"
+
+    def clean_text(text):
+        if not text: return text
+        text = re.sub(r'```json\s*\n[\s\S]*?\n```', '', text)
+        text = re.sub(r'```\s*\n[\s\S]*?\n```', '', text)
+        text = re.sub(r'\{[^{}]{50,}\}', '', text)
+        text = re.sub(r'\[[^\[\]]{50,}\]', '', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
     if isinstance(response, dict) and isinstance(response.get("messages"), list):
-        for msg in reversed(response["messages"]):
-            content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        msgs = response["messages"]
+        last_human_idx = -1
+        for i in range(len(msgs) - 1, -1, -1):
+            if is_human_message(msgs[i]):
+                last_human_idx = i
+                break
+        new_msgs = msgs[last_human_idx + 1:] if last_human_idx >= 0 else msgs
+
+        candidates = []
+        for msg in reversed(new_msgs):
+            if is_tool_message(msg): continue
+            if is_human_message(msg): continue
+            content = get_msg_content(msg)
             text = extract_text(content)
-            tool_calls = extract_tool_calls(msg)
-            if tool_calls: return {"text": text or "", "tool_calls": tool_calls}
-            if text: return {"text": text, "tool_calls": []}
+            if is_tool_result_noise(text): continue
+            if text and len(text.strip()) > 20:
+                cleaned = clean_text(text)
+                if cleaned and len(cleaned) > 20 and not is_tool_result_noise(cleaned):
+                    candidates.append({"text": cleaned, "tool_calls": []})
+        if candidates:
+            best = max(candidates, key=lambda c: len(c["text"]))
+            return best
+        for msg in reversed(new_msgs):
+            if is_tool_message(msg): continue
+            if is_human_message(msg): continue
+            content = get_msg_content(msg)
+            text = extract_text(content)
+            if text and not is_tool_result_noise(text):
+                return {"text": text, "tool_calls": []}
 
     if hasattr(response, "content"):
         text = extract_text(response.content)

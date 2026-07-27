@@ -187,6 +187,29 @@ ipcMain.handle("scan-directory", async (event, dirPath) => {
   return scanDir(dirPath, "");
 });
 
+// ── DELETE FILE/DIRECTORY IPC HANDLER ────────────
+
+ipcMain.handle("delete-entry", async (event, basePath, relPath) => {
+  try {
+    if (!basePath || !relPath) return { success: false, error: "Missing path" };
+    const normalizedBase = path.resolve(basePath);
+    const full = path.resolve(path.join(basePath, relPath));
+    if (!full.startsWith(normalizedBase + path.sep) && full !== normalizedBase) {
+      return { success: false, error: "Path traversal blocked" };
+    }
+    if (!fs.existsSync(full)) return { success: false, error: "Not found" };
+    const stat = fs.statSync(full);
+    if (stat.isDirectory()) {
+      fs.rmSync(full, { recursive: true, force: true });
+    } else {
+      fs.unlinkSync(full);
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // ── APP LIFECYCLE ───────────────────────────────
 
 app.whenReady().then(async () => {

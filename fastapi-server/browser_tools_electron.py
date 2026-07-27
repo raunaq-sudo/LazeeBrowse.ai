@@ -151,6 +151,12 @@ def build_tools(browser_command, request_user_input, log_chat, base_path=None):
         return await browser_command("get_links", {})
 
     @tool
+    async def get_search_results() -> list:
+        """Extract search results from Google, DuckDuckGo, or Brave. Returns [{title, url, snippet}]."""
+        await log_chat("Extracting search results")
+        return await browser_command("get_search_results", {})
+
+    @tool
     async def get_all_headings() -> list:
         """Get all headings (H1-H6) on the page."""
         await log_chat("Getting headings")
@@ -238,40 +244,6 @@ def build_tools(browser_command, request_user_input, log_chat, base_path=None):
         except Exception as e:
             return str(e)
 
-    # ── MEMORY ───────────────────────────────────
-
-    @tool
-    async def update_memory(url: str, reason: str, observation: str) -> str:
-        """Store an observation about a URL."""
-        await log_chat(f"Updating memory: {url}")
-        try:
-            memory_path = os.path.join(get_user_files_dir(), "url_memory.json")
-            memory = {}
-            if os.path.exists(memory_path):
-                try:
-                    with open(memory_path, "r") as f:
-                        memory = json.load(f)
-                except json.JSONDecodeError:
-                    memory = {}
-            memory.setdefault(url, []).append({"reason": reason, "observation": observation})
-            with open(memory_path, "w") as f:
-                json.dump(memory, f)
-            return "OK"
-        except Exception as e:
-            return str(e)
-
-    @tool
-    async def read_memory() -> str:
-        """Read all stored URL observations."""
-        try:
-            memory_path = os.path.join(get_user_files_dir(), "url_memory.json")
-            if not os.path.exists(memory_path):
-                return "{}"
-            with open(memory_path, "r") as f:
-                return json.dumps(json.load(f), indent=2)
-        except Exception as e:
-            return str(e)
-
     # ── UTILITY ──────────────────────────────────
 
     @tool
@@ -293,9 +265,8 @@ def build_tools(browser_command, request_user_input, log_chat, base_path=None):
     return [
         open_url, get_url, get_title, go_back, go_forward,
         click, type_text, scroll, submit_form, press_key, fill_any_form,
-        get_page_text, get_all_links, get_all_headings, get_ui_schema, get_page_content,
+        get_page_text, get_all_links, get_search_results, get_all_headings, get_ui_schema, get_page_content,
         get_user_confirmation, get_user_input_from_options,
         write_file, read_file, delete_entry,
-        update_memory, read_memory,
         get_current_date_time, action_logger,
     ]

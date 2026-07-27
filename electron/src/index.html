@@ -31,7 +31,8 @@
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/>
           <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="currentColor" stroke-width="1.5"/>
         </svg>
-        <input type="text" id="urlInput" placeholder="Enter URL..." autocomplete="off" />
+        <input type="text" id="urlInput" placeholder="Enter URL or search... (Ctrl+Enter)" autocomplete="off" />
+        <div class="url-dropdown hidden" id="urlDropdown"></div>
       </div>
     </div>
     <div class="titlebar-right">
@@ -104,7 +105,10 @@
   <div class="log-resize-handle" id="logResizeHandle"></div>
   <div class="log-header" onclick="toggleLogPanel()">
     <span>Activity Log</span>
-    <button class="log-toggle" id="logToggle">^</button>
+    <button class="log-toggle" id="logToggle">
+      <span class="log-badge hidden" id="logBadge"></span>
+      ^
+    </button>
   </div>
   <div class="log-content" id="logContent"></div>
 </div>
@@ -147,18 +151,6 @@
     </button>
 
     <div class="connect-error" id="connectError"></div>
-  </div>
-</div>
-
-<!-- FORM INPUT MODAL -->
-<div class="form-modal-overlay hidden" id="formModal">
-  <div class="form-modal">
-    <div class="form-modal-header" id="formModalHeader">AI needs input</div>
-    <div class="form-modal-body" id="formModalBody"></div>
-    <div class="form-modal-footer">
-      <button class="form-modal-btn" id="formModalSubmit">Submit</button>
-      <button class="form-modal-btn secondary" id="formModalCancel">Cancel</button>
-    </div>
   </div>
 </div>
 

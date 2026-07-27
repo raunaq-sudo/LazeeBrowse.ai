@@ -22,6 +22,22 @@ MODEL_REGISTRY = {
         "provider": "google",
         "label": "Gemini 2.5 Pro"
     },
+
+    "nemotron-3-ultra-free": {
+        "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "provider": "openrouter",
+        "label": "Nemotron 3 Ultra (Free)"
+    },
+    "nemotron-3-nano-omni-free": {
+        "model_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "provider": "openrouter",
+        "label": "Nemotron 3 Nano Omni (Free)"
+    },
+    "openrouter-free": {
+        "model_id": "openrouter/free",
+        "provider": "openrouter",
+        "label": "OpenRouter Free (Auto)"
+    },
 }
 
 
@@ -56,6 +72,14 @@ async def get_models(api_key, model_tag="deepseek-v4-flash", temperature=0.5):
             model=model_id,
             temperature=temperature,
             api_key=api_key,
+        )
+    elif provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            model=model_id,
+            temperature=temperature,
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
         )
     else:
         raise ValueError(f"Unsupported provider: {provider}")

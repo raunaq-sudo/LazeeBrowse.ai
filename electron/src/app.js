@@ -98,6 +98,20 @@ loadModels().then(() => loadSettings());
 function getBrowserView() {
   if (!browserView) {
     browserView = document.getElementById("browserView");
+    if (browserView) {
+      browserView.addEventListener("did-navigate", () => {
+        try {
+          const url = browserView.getURL();
+          document.getElementById("urlInput").value = url;
+        } catch (e) {}
+      });
+      browserView.addEventListener("did-navigate-in-page", () => {
+        try {
+          const url = browserView.getURL();
+          document.getElementById("urlInput").value = url;
+        } catch (e) {}
+      });
+    }
   }
   return browserView;
 }
@@ -253,8 +267,7 @@ function handleServerMessage(data) {
 
     case "message":
       setThinking(false);
-      addLog(`AI: ${data.content}`);
-      expandLogPanel();
+      addResponseLog(data.content);
       break;
 
     case "form_input":
@@ -463,13 +476,105 @@ async function handleBrowserCommand(data) {
 }
 
 // ── URL BAR ─────────────────────────────────────
-document.getElementById("urlInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    const url = e.target.value.trim();
-    if (url) {
-      getBrowserView().src = url;
+const urlInput = document.getElementById("urlInput");
+const urlDropdown = document.getElementById("urlDropdown");
+
+function flattenFileTree(tree, prefix) {
+  const results = [];
+  for (const entry of tree) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.type === "file") {
+      results.push({ name: entry.name, path: path });
+    }
+    if (entry.children) {
+      results.push(...flattenFileTree(entry.children, path));
     }
   }
+  return results;
+}
+
+function showUrlDropdown(query) {
+  if (!query || !fileTreeData.length) {
+    urlDropdown.classList.add("hidden");
+    return;
+  }
+  const flat = flattenFileTree(fileTreeData, "");
+  const q = query.toLowerCase();
+  const matches = flat.filter(f => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q)).slice(0, 8);
+  if (!matches.length) {
+    urlDropdown.classList.add("hidden");
+    return;
+  }
+  urlDropdown.innerHTML = "";
+  matches.forEach(f => {
+    const item = document.createElement("div");
+    item.className = "url-dropdown-item";
+    item.innerHTML = `<span class="dropdown-file-name">${f.name}</span><span class="dropdown-file-path">${f.path}</span>`;
+    item.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      urlInput.value = f.path;
+      urlDropdown.classList.add("hidden");
+      navigateToUrl(f.path);
+    });
+    urlDropdown.appendChild(item);
+  });
+  urlDropdown.classList.remove("hidden");
+}
+
+function hideUrlDropdown() {
+  urlDropdown.classList.add("hidden");
+}
+
+function navigateToUrl(url) {
+  if (!url) return;
+  if (!url.match(/^https?:\/\//i) && !url.startsWith("file:")) {
+    url = "https://" + url;
+  }
+  getBrowserView().src = url;
+  urlInput.value = url;
+}
+
+urlInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    let val = urlInput.value.trim();
+    if (val && !val.match(/^https?:\/\//i) && !val.startsWith("file:")) {
+      val = "https://www." + val.replace(/^www\./i, "") + ".com";
+    }
+    hideUrlDropdown();
+    if (val) navigateToUrl(val);
+    return;
+  }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const val = urlInput.value.trim();
+    hideUrlDropdown();
+    if (val) navigateToUrl(val);
+    return;
+  }
+  if (e.key === "Escape") {
+    hideUrlDropdown();
+    urlInput.blur();
+    return;
+  }
+  if (e.key === "ArrowDown" && !urlDropdown.classList.contains("hidden")) {
+    e.preventDefault();
+    const first = urlDropdown.querySelector(".url-dropdown-item");
+    if (first) first.focus();
+    return;
+  }
+});
+
+urlInput.addEventListener("input", () => {
+  showUrlDropdown(urlInput.value.trim());
+});
+
+urlInput.addEventListener("blur", () => {
+  setTimeout(hideUrlDropdown, 150);
+});
+
+urlInput.addEventListener("focus", () => {
+  if (urlInput.value.trim()) showUrlDropdown(urlInput.value.trim());
 });
 
 // ── NAV BUTTONS ─────────────────────────────────
@@ -547,80 +652,87 @@ function handleFormInput(data) {
   const { request_id, content, input_type, options, fields } = data;
   currentFormRequest = { request_id, input_type };
 
-  const overlay = document.getElementById("formModal");
-  const header = document.getElementById("formModalHeader");
-  const body = document.getElementById("formModalBody");
-  const submitBtn = document.getElementById("formModalSubmit");
-  const cancelBtn = document.getElementById("formModalCancel");
+  const logs = document.getElementById("logContent");
+  const wrapper = document.createElement("div");
+  wrapper.className = "log-line form-request";
+  wrapper.id = `form-request-${request_id}`;
 
-  header.textContent = content || "AI needs input";
-  body.innerHTML = "";
+  const timestamp = document.createElement("span");
+  timestamp.className = "response-timestamp";
+  timestamp.textContent = `[${new Date().toLocaleTimeString()}] AI`;
+
+  const text = document.createElement("div");
+  text.className = "form-request-text";
+  text.textContent = content || "AI needs input";
+
+  const controls = document.createElement("div");
+  controls.className = "form-request-controls";
 
   if (input_type === "confirmation") {
-    body.innerHTML = `
-      <div class="confirm-btns">
-        <button class="yes-btn" onclick="submitFormResponse('yes')">Yes</button>
-        <button class="no-btn" onclick="submitFormResponse('no')">No</button>
-      </div>
-    `;
-    submitBtn.classList.add("hidden");
-    cancelBtn.classList.add("hidden");
+    const yesBtn = document.createElement("button");
+    yesBtn.className = "form-inline-btn yes";
+    yesBtn.textContent = "Yes";
+    yesBtn.onclick = () => submitFormResponse("yes");
+    const noBtn = document.createElement("button");
+    noBtn.className = "form-inline-btn no";
+    noBtn.textContent = "No";
+    noBtn.onclick = () => submitFormResponse("no");
+    controls.appendChild(yesBtn);
+    controls.appendChild(noBtn);
   } else if (input_type === "options" && options && options.length > 0) {
-    options.forEach((opt, idx) => {
+    options.forEach((opt) => {
       const btn = document.createElement("button");
-      btn.className = "option-btn";
-      btn.textContent = `${idx + 1}. ${opt}`;
+      btn.className = "form-inline-btn option";
+      btn.textContent = opt;
       btn.onclick = () => submitFormResponse(opt);
-      body.appendChild(btn);
+      controls.appendChild(btn);
     });
-    submitBtn.classList.add("hidden");
-    cancelBtn.classList.remove("hidden");
   } else if (input_type === "form" && fields && fields.length > 0) {
+    const row = document.createElement("div");
+    row.className = "form-inline-row";
     fields.forEach((field, idx) => {
-      const label = document.createElement("label");
-      label.style.display = "block";
-      label.style.fontSize = "10px";
-      label.style.fontWeight = "600";
-      label.style.color = "var(--text-secondary)";
-      label.style.marginBottom = "4px";
-      label.textContent = field.label || field.placeholder || `Field ${idx + 1}`;
-      body.appendChild(label);
-
       const input = document.createElement("input");
       input.type = "text";
-      input.className = "form-field-input";
+      input.className = "form-inline-input";
       input.dataset.index = idx;
-      input.placeholder = field.placeholder || "";
+      input.placeholder = field.placeholder || field.label || "";
       input.value = field.value || "";
-      body.appendChild(input);
+      if (idx === 0) input.addEventListener("keydown", (e) => { if (e.key === "Enter") controls.querySelector(".form-inline-submit")?.click(); });
+      row.appendChild(input);
     });
-    submitBtn.classList.remove("hidden");
-    cancelBtn.classList.remove("hidden");
+    const btn = document.createElement("button");
+    btn.className = "form-inline-btn submit";
+    btn.textContent = "Send";
+    btn.onclick = () => {
+      const inputs = row.querySelectorAll(".form-inline-input");
+      submitFormResponse(JSON.stringify(Array.from(inputs).map(i => i.value)));
+    };
+    row.appendChild(btn);
+    controls.appendChild(row);
   } else {
+    const row = document.createElement("div");
+    row.className = "form-inline-row";
     const input = document.createElement("input");
     input.type = "text";
-    input.id = "formModalTextInput";
+    input.className = "form-inline-input";
     input.placeholder = "Type your response...";
-    body.appendChild(input);
-    submitBtn.classList.remove("hidden");
-    cancelBtn.classList.remove("hidden");
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") controls.querySelector(".form-inline-submit")?.click(); });
+    const btn = document.createElement("button");
+    btn.className = "form-inline-btn submit";
+    btn.textContent = "Send";
+    btn.onclick = () => submitFormResponse(input.value);
+    row.appendChild(input);
+    row.appendChild(btn);
+    controls.appendChild(row);
     setTimeout(() => input.focus(), 50);
   }
 
-  submitBtn.onclick = () => {
-    if (input_type === "form") {
-      const inputs = body.querySelectorAll(".form-field-input");
-      const values = Array.from(inputs).map(i => i.value);
-      submitFormResponse(JSON.stringify(values));
-    } else {
-      const input = body.querySelector("#formModalTextInput");
-      submitFormResponse(input ? input.value : "");
-    }
-  };
-
-  cancelBtn.onclick = () => submitFormResponse("");
-
-  overlay.classList.remove("hidden");
+  wrapper.appendChild(timestamp);
+  wrapper.appendChild(text);
+  wrapper.appendChild(controls);
+  logs.appendChild(wrapper);
+  logs.scrollTop = logs.scrollHeight;
+  expandLogPanel();
 }
 
 function submitFormResponse(response) {
@@ -635,7 +747,19 @@ function submitFormResponse(response) {
     }));
   }
 
-  document.getElementById("formModal").classList.add("hidden");
+  const formEl = document.getElementById(`form-request-${request_id}`);
+  if (formEl) {
+    const controls = formEl.querySelector(".form-request-controls");
+    if (controls) {
+      controls.querySelectorAll("button").forEach(b => { b.disabled = true; b.classList.add("disabled"); });
+      controls.querySelectorAll("input").forEach(i => { i.disabled = true; });
+    }
+    const responseLabel = document.createElement("div");
+    responseLabel.className = "form-response-label";
+    responseLabel.textContent = response || "(skipped)";
+    controls.appendChild(responseLabel);
+  }
+
   currentFormRequest = null;
 }
 
@@ -650,24 +774,28 @@ function showConnectOverlay() {
 function toggleLogPanel() {
   const panel = document.getElementById("logPanel");
   const btn = document.getElementById("logToggle");
+  const badge = document.getElementById("logBadge");
   const wasCollapsed = panel.classList.contains("collapsed");
   if (wasCollapsed) {
     panel.classList.remove("collapsed");
     panel.style.height = "";
-    btn.textContent = "v";
+    btn.childNodes[btn.childNodes.length - 1].textContent = "v";
+    badge.classList.add("hidden");
   } else {
     panel.classList.add("collapsed");
     panel.style.height = "";
-    btn.textContent = "^";
+    btn.childNodes[btn.childNodes.length - 1].textContent = "^";
   }
 }
 
 function expandLogPanel() {
   const panel = document.getElementById("logPanel");
   const btn = document.getElementById("logToggle");
+  const badge = document.getElementById("logBadge");
   panel.classList.remove("collapsed");
   panel.style.height = "50vh";
-  btn.textContent = "v";
+  btn.childNodes[btn.childNodes.length - 1].textContent = "v";
+  badge.classList.add("hidden");
 }
 
 // ── LOG RESIZE HANDLE ──────────────────────────
@@ -722,7 +850,54 @@ function addLog(message) {
   }
 }
 
-// ── HEARTBEAT ──────────────────────────────────
+function addResponseLog(content) {
+  const logs = document.getElementById("logContent");
+  if (!logs) return;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "log-line ai-response";
+
+  const timestamp = document.createElement("span");
+  timestamp.className = "response-timestamp";
+  timestamp.textContent = `[${new Date().toLocaleTimeString()}] AI`;
+
+  const text = document.createElement("div");
+  text.className = "response-text";
+  text.textContent = content;
+
+  const footer = document.createElement("div");
+  footer.className = "response-footer";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "copy-btn";
+  copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="2"/></svg><span>Copy</span>`;
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(content).then(() => {
+      copyBtn.classList.add("copied");
+      copyBtn.querySelector("span").textContent = "Copied!";
+      setTimeout(() => {
+        copyBtn.classList.remove("copied");
+        copyBtn.querySelector("span").textContent = "Copy";
+      }, 1500);
+    });
+  });
+
+  footer.appendChild(copyBtn);
+  wrapper.appendChild(timestamp);
+  wrapper.appendChild(text);
+  wrapper.appendChild(footer);
+  logs.appendChild(wrapper);
+  logs.scrollTop = logs.scrollHeight;
+
+  while (logs.children.length > 100) {
+    logs.removeChild(logs.firstChild);
+  }
+
+  const panel = document.getElementById("logPanel");
+  if (panel && panel.classList.contains("collapsed")) {
+    document.getElementById("logBadge").classList.remove("hidden");
+  }
+}
 let heartbeatInterval = null;
 
 function startHeartbeat() {
@@ -781,14 +956,31 @@ function renderTreeNode(parent, entry, depth) {
   name.textContent = entry.name;
   name.title = entry.path;
 
+  const delBtn = document.createElement("button");
+  delBtn.className = "tree-delete-btn";
+  delBtn.textContent = "\u00D7";
+  delBtn.title = `Delete ${entry.name}`;
+  delBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteFileFromTree(entry);
+  });
+
   item.appendChild(icon);
   item.appendChild(name);
+  item.appendChild(delBtn);
   parent.appendChild(item);
 
   if (entry.type === "file") {
     item.addEventListener("click", (e) => {
+      if (e.target === delBtn) return;
       e.stopPropagation();
       attachFileFromTree(entry);
+    });
+    item.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      if (!savedProjectDir) return;
+      const fullPath = savedProjectDir + "/" + entry.path;
+      window.electronAPI.openFile(fullPath);
     });
   }
 
@@ -802,6 +994,7 @@ function renderTreeNode(parent, entry, depth) {
     entry.children.forEach(child => renderTreeNode(childContainer, child, depth + 1));
 
     item.addEventListener("click", (e) => {
+      if (e.target === delBtn) return;
       e.stopPropagation();
       expanded = !expanded;
       childContainer.style.display = expanded ? "block" : "none";
@@ -827,6 +1020,20 @@ function attachFileFromTree(entry) {
   if (attachedFiles.some(f => f.path === relPath)) return;
   attachedFiles.push({ name, path: relPath });
   renderAttachedFiles();
+}
+
+async function deleteFileFromTree(entry) {
+  if (!savedProjectDir) return;
+  if (!confirm(`Delete "${entry.name}"?`)) return;
+  const result = await window.electronAPI.deleteEntry(savedProjectDir, entry.path);
+  if (!result.success) {
+    addLog(`Delete failed: ${result.error}`);
+    return;
+  }
+  attachedFiles = attachedFiles.filter(f => f.path !== entry.path);
+  renderAttachedFiles();
+  await loadFileTree();
+  addLog(`Deleted: ${entry.name}`);
 }
 
 // ── FILE ATTACHMENT ─────────────────────────────
