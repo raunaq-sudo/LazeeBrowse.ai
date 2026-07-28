@@ -697,6 +697,22 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
   getBrowserView().reload();
 });
 
+// ── THEME TOGGLE ────────────────────────────────
+(function initTheme() {
+  const saved = localStorage.getItem("ai_browser_theme");
+  if (saved === "light" || saved === "dark") {
+    document.documentElement.setAttribute("data-theme", saved);
+  } else {
+    document.documentElement.setAttribute("data-theme", "dark");
+  }
+  document.getElementById("themeToggle").addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme");
+    const next = current === "light" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", next);
+    localStorage.setItem("ai_browser_theme", next);
+  });
+})();
+
 // ── INSTRUCTION INPUT ───────────────────────────
 document.getElementById("instructionInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
@@ -787,8 +803,13 @@ function handleUserInputRequest(data) {
     controls.appendChild(yesBtn);
     controls.appendChild(noBtn);
   } else if (tool === "get_user_input_from_options" && args && args.options) {
-    const options = typeof args.options === "string" ? args.options.split(",").map(s => s.trim()) : args.options;
-    (Array.isArray(options) ? options : []).forEach((opt) => {
+    let raw = args.options;
+    if (typeof raw === "string") {
+      raw = raw.split("\n").map(s => s.trim()).filter(Boolean).join(",");
+      raw = raw.split(",").map(s => s.trim()).filter(Boolean);
+    }
+    const options = Array.isArray(raw) ? raw : [];
+    options.forEach((opt) => {
       const btn = document.createElement("button");
       btn.className = "form-inline-btn option";
       btn.textContent = opt;
