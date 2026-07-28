@@ -103,10 +103,16 @@ def build_tools(browser_command, request_user_input, log_chat, base_path=None):
 
         user_response = await request_user_input("Fill in the form fields:", input_type="form", fields=fields)
 
-        try:
-            values = json.loads(user_response) if user_response.startswith("[") else [user_response]
-        except:
-            values = [user_response]
+        values = []
+        if user_response:
+            try:
+                parsed = json.loads(user_response)
+                if isinstance(parsed, list):
+                    values = [str(v) for v in parsed]
+                elif isinstance(parsed, str):
+                    values = [parsed]
+            except (json.JSONDecodeError, TypeError):
+                values = [v.strip() for v in user_response.split(",")] if "," in user_response else [user_response]
 
         results, errors = [], []
         for i, element in enumerate(form_elements):

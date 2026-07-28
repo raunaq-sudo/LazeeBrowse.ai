@@ -346,7 +346,8 @@ async function handleBrowserCommand(data) {
           (() => {
             const el = document.querySelector('${escapeJsString(params.selector)}');
             if (!el) return { error: 'Element not found: ${escapeJsString(params.selector)}' };
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.scrollIntoView({ block: 'center' });
+            el.focus();
             el.click();
             return { ok: true };
           })()
@@ -358,9 +359,22 @@ async function handleBrowserCommand(data) {
             const el = document.querySelector('${escapeJsString(params.selector)}');
             if (!el) return { error: 'Element not found: ${escapeJsString(params.selector)}' };
             el.focus();
-            el.value = '${escapeJsString(params.text)}';
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
+            const text = '${escapeJsString(params.text)}';
+
+            if (el.isContentEditable) {
+              el.textContent = text;
+              el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+            } else {
+              const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+              const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+              if (nativeSetter) {
+                nativeSetter.call(el, text);
+              } else {
+                el.value = text;
+              }
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
             return { ok: true };
           })()
         `);
@@ -396,8 +410,55 @@ async function handleBrowserCommand(data) {
         result = await webviewExecute(`
           (() => {
             const mode = '${params.mode || 'visible'}';
-            const elements = document.querySelectorAll('input, textarea, select, button, a[href]');
-            return Array.from(elements).map(el => {
+            const selectors = 'input, textarea, select, button, a[href]';
+            const elements = document.querySelectorAll(selectors);
+
+            const modals = document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"], .modal, .dialog, .popup, .overlay, [class*="modal"], [class*="dialog"]');
+            const modalInfo = Array.from(modals).map(m => {
+              const rect = m.getBoundingClientRect();
+              const isVisible = rect.width > 0 && rect.height > 0 &&
+                window.getComputedStyle(m).visibility !== 'hidden' &&
+                window.getComputedStyle(m).display !== 'none';
+              if (!isVisible) return null;
+              const modalEls = m.querySelectorAll(selectors);
+              return {
+                tag: m.tagName.toLowerCase(),
+                selector: m.id ? '#' + m.id : (m.className && typeof m.className === 'string' ? '.' + m.className.split(/\\s+/).filter(Boolean).slice(0, 2).join('.') : m.tagName.toLowerCase()),
+                text: m.innerText?.trim().slice(0, 200) || '',
+                isModal: true,
+                children: Array.from(modalEls).map(el => {
+                  const r = el.getBoundingClientRect();
+                  let sel = '';
+                  if (el.id) sel = '#' + el.id;
+                  else if (el.name) sel = '[name="' + el.name + '"]';
+                  else {
+                    let path = [];
+                    let cur = el;
+                    while (cur && cur !== m) {
+                      let seg = cur.tagName.toLowerCase();
+                      if (cur.id) { seg = '#' + cur.id; path.unshift(seg); break; }
+                      if (cur.className && typeof cur.className === 'string') {
+                        const cls = cur.className.split(/\\s+/).filter(Boolean).slice(0, 2).join('.');
+                        if (cls) seg += '.' + cls;
+                      }
+                      path.unshift(seg);
+                      cur = cur.parentElement;
+                    }
+                    sel = path.join(' > ');
+                  }
+                  return {
+                    tag: el.tagName.toLowerCase(),
+                    selector: sel,
+                    text: (el.innerText || el.placeholder || '').trim().slice(0, 100),
+                    type: el.type || null,
+                    value: el.value || null,
+                    placeholder: el.placeholder || null,
+                  };
+                }),
+              };
+            }).filter(Boolean);
+
+            const pageElements = Array.from(elements).map(el => {
               const rect = el.getBoundingClientRect();
               const isVisible = rect.width > 0 && rect.height > 0 &&
                 window.getComputedStyle(el).visibility !== 'hidden' &&
@@ -431,6 +492,7 @@ async function handleBrowserCommand(data) {
                 rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height }
               };
             }).filter(Boolean);
+            return { modals: modalInfo, elements: pageElements };
           })()
         `);
         break;
@@ -447,9 +509,17 @@ async function handleBrowserCommand(data) {
         result = await webviewExecute(`
           (() => {
             const active = document.activeElement;
-            if (active && active.form) { active.form.submit(); return { ok: true }; }
-            const event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true });
-            document.activeElement.dispatchEvent(event);
+            if (active) {
+              let form = active.closest('form');
+              if (!form && active.form) form = active.form;
+              if (form) { form.requestSubmit(); return { ok: true }; }
+            }
+            const forms = document.querySelectorAll('form');
+            if (forms.length === 1) { forms[0].requestSubmit(); return { ok: true }; }
+            if (active) {
+              active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+              active.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+            }
             return { ok: true };
           })()
         `);
@@ -457,19 +527,18 @@ async function handleBrowserCommand(data) {
       case "press_key":
         result = await webviewExecute(`
           (() => {
+            const key = '${escapeJsString(params.key)}';
             const keyMap = {
               'Enter': 13, 'Tab': 9, 'Escape': 27, 'Backspace': 8, 'Delete': 46,
               'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
               ' ': 32, 'Home': 36, 'End': 35, 'PageUp': 33, 'PageDown': 34
             };
-            const keyCode = keyMap['${escapeJsString(params.key)}'] || 0;
-            const event = new KeyboardEvent('keydown', {
-              key: '${escapeJsString(params.key)}',
-              code: '${escapeJsString(params.key)}',
-              keyCode: keyCode,
-              bubbles: true
-            });
-            document.activeElement.dispatchEvent(event);
+            const keyCode = keyMap[key] || 0;
+            const el = document.activeElement;
+            if (el) {
+              el.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, keyCode, which: keyCode, bubbles: true }));
+              el.dispatchEvent(new KeyboardEvent('keyup', { key, code: key, keyCode, which: keyCode, bubbles: true }));
+            }
             return { ok: true };
           })()
         `);
@@ -494,6 +563,9 @@ async function handleBrowserCommand(data) {
 
   // Send result back to backend
   if (ws && ws.readyState === WebSocket.OPEN) {
+    if (command === "get_schema" && result && result.modals && result.modals.length > 0) {
+      addLog(`Modal found: ${result.modals.length} dialog(s) detected`);
+    }
     ws.send(JSON.stringify({
       type: "browser_result",
       request_id: request_id,
