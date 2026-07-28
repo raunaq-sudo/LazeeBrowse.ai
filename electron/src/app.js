@@ -38,6 +38,8 @@ async function selectFolder() {
   }
 }
 
+let modelProviderMap = {};
+
 async function loadModels() {
   try {
     const base = getRestBase();
@@ -46,15 +48,26 @@ async function loadModels() {
     const data = await res.json();
     const select = document.getElementById("modelName");
     select.innerHTML = "";
+    modelProviderMap = {};
     (data.models || []).forEach(m => {
+      modelProviderMap[m.tag] = m.provider;
       const opt = document.createElement("option");
       opt.value = m.tag;
       opt.textContent = m.label;
       select.appendChild(opt);
     });
+    select.addEventListener("change", () => swapApiKeyForModel(select.value));
   } catch (e) {
     console.log("Could not load models:", e.message);
   }
+}
+
+function swapApiKeyForModel(modelTag) {
+  const provider = modelProviderMap[modelTag] || "deepseek";
+  const input = document.getElementById("llmApiKey");
+  const prev = localStorage.getItem(`api_key_${provider}`) || "";
+  input.value = prev;
+  input.placeholder = `${provider.charAt(0).toUpperCase() + provider.slice(1)} API key`;
 }
 
 async function loadSettings() {
@@ -63,13 +76,17 @@ async function loadSettings() {
     const res = await fetch(`${base}/api/settings`);
     if (!res.ok) return;
     const data = await res.json();
-    if (data.api_key) document.getElementById("llmApiKey").value = data.api_key;
+    const api_keys = data.api_keys || {};
+    for (const [provider, key] of Object.entries(api_keys)) {
+      if (key) localStorage.setItem(`api_key_${provider}`, key);
+    }
     if (data.model_name) {
       const select = document.getElementById("modelName");
       if (select.querySelector(`option[value="${data.model_name}"]`)) {
         select.value = data.model_name;
       }
     }
+    swapApiKeyForModel(document.getElementById("modelName").value);
     if (data.project_dir) {
       document.getElementById("projectDir").value = data.project_dir;
       savedProjectDir = data.project_dir;
@@ -79,13 +96,18 @@ async function loadSettings() {
   }
 }
 
-async function saveSettings(api_key, model_name, project_dir) {
+async function saveSettings(model_name, project_dir) {
   try {
     const base = getRestBase();
+    const api_keys = {};
+    for (const p of ["deepseek", "google", "openrouter"]) {
+      const k = localStorage.getItem(`api_key_${p}`) || "";
+      if (k) api_keys[p] = k;
+    }
     await fetch(`${base}/api/settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_key, model_name, project_dir }),
+      body: JSON.stringify({ api_keys, model_name, project_dir }),
     });
   } catch (e) {
     console.log("Could not save settings:", e.message);
@@ -148,8 +170,11 @@ function connectToAgent() {
   const api_key = document.getElementById("llmApiKey").value.trim();
   const model_name = document.getElementById("modelName").value;
   const project_dir = document.getElementById("projectDir").value.trim();
+  const provider = modelProviderMap[model_name] || "deepseek";
   if (!serverRaw) return showError("Please enter a server URL.");
   if (!project_dir) return showError("Please select a project directory.");
+
+  if (api_key) localStorage.setItem(`api_key_${provider}`, api_key);
 
   if (ws) {
     if (ws.readyState === WebSocket.OPEN) return;
@@ -189,6 +214,7 @@ function connectToAgent() {
       type: "llmApiAuth",
       api_key: api_key,
       model_name: model_name,
+      provider: provider,
     }));
 
     // Tell backend this is a browser-control session
@@ -205,7 +231,7 @@ function connectToAgent() {
       }));
     }
 
-    saveSettings(api_key, model_name, folder_path);
+    saveSettings(model_name, folder_path);
     projectDirPath = folder_path;
     hideConnectOverlay();
     loadFileTree().then(() => updateSidebarTogglePosition());
@@ -268,6 +294,7 @@ function handleServerMessage(data) {
     case "message":
       setThinking(false);
       addResponseLog(data.content);
+      expandLogPanel();
       break;
 
     case "form_input":
@@ -929,6 +956,13 @@ async function loadFileTree() {
   } catch (e) {
     console.log("Could not load file tree:", e.message);
   }
+}
+
+async function refreshFileTree() {
+  const btn = document.getElementById("sidebarRefresh");
+  if (btn) btn.style.animation = "spin 0.6s linear";
+  await loadFileTree();
+  if (btn) setTimeout(() => btn.style.animation = "", 600);
 }
 
 function renderFileTree() {

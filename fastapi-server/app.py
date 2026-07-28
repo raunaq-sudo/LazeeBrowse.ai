@@ -34,21 +34,19 @@ app.add_middleware(
 
 @app.get("/api/settings")
 async def get_settings():
-    return {
-        "api_key": db.get_setting("api_key") or "",
-        "model_name": db.get_setting("model_name") or "deepseek-v4-flash",
-        "project_dir": db.get_setting("project_dir") or "",
-    }
+    return db.get_all_settings()
 
 @app.post("/api/settings")
 async def save_settings(request: Request):
     body = await request.json()
-    if "api_key" in body:
-        db.set_setting("api_key", body["api_key"])
-    if "model_name" in body:
-        db.set_setting("model_name", body["model_name"])
-    if "project_dir" in body:
-        db.set_setting("project_dir", body["project_dir"])
+    api_keys = body.get("api_keys", {})
+    if not api_keys and body.get("api_key"):
+        api_keys = {body.get("provider", "deepseek"): body["api_key"]}
+    db.save_all_settings(
+        model_name=body.get("model_name"),
+        project_dir=body.get("project_dir"),
+        api_keys=api_keys or None,
+    )
     return {"ok": True}
 
 @app.get("/api/models")
@@ -414,11 +412,14 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             await safe_ws.send({"type": "error", "content": "LLM not configured. Please check your API key and model settings.", "timestamp": datetime.now().isoformat()})
             return
 
+        sync_skills_to_project()
+
         agent = create_deep_agent(
             model=llm,
             tools=tools,
             backend=FilesystemBackend(root_dir=os.path.join(session_project_dir, "files"), virtual_mode=True),
             system_prompt=prompt,
+            skills=["/skills/user/"],
         )
 
         await log_wrapper("Agent running...")
@@ -525,8 +526,11 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     await safe_ws.send({"type": "system", "event": "history_cleared", "timestamp": datetime.now().isoformat()})
 
                 elif msg_type == "llmApiAuth":
-                    api_key = data.get("api_key", "").strip()
                     model_tag = data.get("model_name", "deepseek-v4-flash").strip()
+                    provider = data.get("provider", "deepseek").strip()
+                    api_key = data.get("api_key", "").strip()
+                    if not api_key:
+                        api_key = db.get_setting(f"api_key_{provider}") or ""
                     try:
                         global llm, llm_deterministic
                         llm = await get_models(api_key, model_tag=model_tag)
