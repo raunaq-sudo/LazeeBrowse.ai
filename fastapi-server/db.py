@@ -3,7 +3,7 @@ import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "settings.db")
 
-PROVIDERS = ["deepseek", "google", "openrouter"]
+PROVIDERS = ["deepseek", "google", "anthropic", "openai", "openrouter"]
 
 
 def _connect():

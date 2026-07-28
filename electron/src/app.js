@@ -100,7 +100,7 @@ async function saveSettings(model_name, project_dir) {
   try {
     const base = getRestBase();
     const api_keys = {};
-    for (const p of ["deepseek", "google", "openrouter"]) {
+    for (const p of ["deepseek", "google", "anthropic", "openai", "openrouter"]) {
       const k = localStorage.getItem(`api_key_${p}`) || "";
       if (k) api_keys[p] = k;
     }
