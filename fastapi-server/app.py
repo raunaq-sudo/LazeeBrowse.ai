@@ -353,6 +353,23 @@ def clean_up_response(response):
 
 # ── AGENT RESPONSE ──────────────────────────────
 
+from langchain_core.callbacks import BaseCallbackHandler
+
+class StreamingCallbackHandler(BaseCallbackHandler):
+    def __init__(self, safe_ws):
+        self.safe_ws = safe_ws
+
+    async def on_llm_new_token(self, token: str, **kwargs):
+        if token.strip():
+            await self.safe_ws.send({"type": "thinking_token", "content": token})
+
+    async def on_tool_start(self, serialized: dict, input_str: str, **kwargs):
+        name = serialized.get("name", "unknown")
+        await self.safe_ws.send({"type": "tool_call", "name": name, "input": input_str[:200]})
+
+    async def on_tool_end(self, output: str, **kwargs):
+        pass
+
 async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket, attached_files: list = None):
     try:
         if safe_ws.is_closed:
@@ -424,7 +441,8 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
         await log_wrapper("Agent running...")
 
-        config = {"recursion_limit": 500, "configurable": {"thread_id": str(uuid.uuid4())}}
+        callback_handler = StreamingCallbackHandler(safe_ws)
+        config = {"recursion_limit": 500, "configurable": {"thread_id": str(uuid.uuid4())}, "callbacks": [callback_handler]}
         try:
             response = await agent.ainvoke(
                 {"messages": chat_manager.get_chat_history(session_id)},

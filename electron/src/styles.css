@@ -163,6 +163,13 @@ html, body {
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .thinking-bar.visible { display: flex; }
+
+.thinking-line {
+  color: var(--accent-soft) !important;
+  font-style: italic;
+  font-size: 11px;
+  word-break: break-word;
+}
 .thinking-dots { display: flex; gap: 4px; }
 .thinking-dots span {
   width: 4px; height: 4px; border-radius: 50%;

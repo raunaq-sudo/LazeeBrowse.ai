@@ -283,6 +283,14 @@ function handleServerMessage(data) {
       setThinking(true);
       break;
 
+    case "thinking_token":
+      addThinkingToken(data.content);
+      break;
+
+    case "tool_call":
+      addLog(`Tool: ${data.name}${data.input ? ` (${data.input})` : ""}`);
+      break;
+
     case "log":
       addLog(data.content);
       break;
@@ -713,6 +721,7 @@ async function sendInstruction() {
   const filesToSend = [...attachedFiles];
   addLog(`You: ${content}${filesToSend.length ? ` [${filesToSend.length} file(s) attached]` : ""}`);
   ws.send(JSON.stringify({ type: "message", content, attached_files: filesToSend }));
+  resetThinkingTokens();
 
   input.value = "";
   input.style.height = "auto";
@@ -947,6 +956,25 @@ function addLog(message) {
   while (logs.children.length > 100) {
     logs.removeChild(logs.firstChild);
   }
+}
+
+let thinkingLine = null;
+
+function addThinkingToken(token) {
+  const logs = document.getElementById("logContent");
+  if (!logs) return;
+  if (!thinkingLine) {
+    thinkingLine = document.createElement("div");
+    thinkingLine.className = "log-line thinking-line";
+    thinkingLine.textContent = `[${new Date().toLocaleTimeString()}] Thinking: `;
+    logs.appendChild(thinkingLine);
+  }
+  thinkingLine.textContent += token;
+  logs.scrollTop = logs.scrollHeight;
+}
+
+function resetThinkingTokens() {
+  thinkingLine = null;
 }
 
 function addResponseLog(content) {
