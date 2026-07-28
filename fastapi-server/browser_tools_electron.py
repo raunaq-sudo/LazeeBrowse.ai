@@ -5,7 +5,7 @@ from typing import List, Dict, Optional
 from langchain.tools import tool
 
 
-def build_tools(browser_command, request_user_input, log_chat, base_path=None):
+def build_tools(browser_command, log_chat, base_path=None):
     """Create LangChain tools that control Electron's BrowserView via IPC."""
 
     def get_user_files_dir():
@@ -97,50 +97,9 @@ def build_tools(browser_command, request_user_input, log_chat, base_path=None):
 
     @tool
     async def fill_any_form(form_elements: List[Dict[str, str]]) -> str:
-        """Fill multiple form fields. Each element: {selector, value}. Prompts user if value missing."""
-        await log_chat("Filling form")
-        fields = [{"label": e.get("selector", ""), "placeholder": e.get("value", ""), "value": e.get("value", "")} for e in form_elements]
-
-        user_response = await request_user_input("Fill in the form fields:", input_type="form", fields=fields)
-
-        values = []
-        if user_response:
-            try:
-                parsed = json.loads(user_response)
-                if isinstance(parsed, list):
-                    values = [str(v) for v in parsed]
-                elif isinstance(parsed, str):
-                    values = [parsed]
-            except (json.JSONDecodeError, TypeError):
-                values = [v.strip() for v in user_response.split(",")] if "," in user_response else [user_response]
-
-        results, errors = [], []
-        for i, element in enumerate(form_elements):
-            selector = element.get("selector")
-            if not selector:
-                errors.append("Missing selector")
-                continue
-            value = values[i] if i < len(values) else element.get("value", "")
-            if value in ("null", "undefined") or (isinstance(value, str) and value.strip() == ""):
-                value = element.get("value", "")
-            try:
-                result = await browser_command("type", {"selector": selector, "text": value})
-                if isinstance(result, dict) and result.get("error"):
-                    errors.append(f"{selector}: {result['error']}")
-                else:
-                    results.append(selector)
-            except Exception as e:
-                errors.append(f"{selector}: {e}")
-
-        if results and not errors:
-            await browser_command("submit_form", {})
-
-        parts = []
-        if results:
-            parts.append(f"Filled: {', '.join(results)}")
-        if errors:
-            parts.append(f"Errors: {' | '.join(errors)}")
-        return " | ".join(parts) if parts else "OK"
+        """Fill multiple form fields. Each element: {selector, value}. Prompts user if value missing.
+        After getting user input, call type_text for each filled field."""
+        return json.dumps(form_elements)
 
     # ── BROWSER: EXTRACTION ──────────────────────
 
@@ -180,29 +139,19 @@ def build_tools(browser_command, request_user_input, log_chat, base_path=None):
         return await browser_command("get_page_content", {})
 
     # ── USER INPUT ───────────────────────────────
+    # These tools are interrupted by HumanInTheLoopMiddleware via interrupt_on.
+    # The tool functions are essentially stubs — the user's respond value
+    # replaces the tool output entirely (the tool never executes).
 
     @tool
     async def get_user_confirmation(query: str) -> str:
-        """Ask user a yes/no question. Returns 'true' or 'false'."""
-        await log_chat("Asking user")
-        try:
-            user_response = await request_user_input(query, input_type="confirmation")
-            if not user_response or user_response in ("null", "undefined"):
-                return "User did not respond."
-            return "true" if "yes" in user_response.lower() else "false" if "no" in user_response.lower() else user_response
-        except Exception as e:
-            return f"{e}"
+        """Ask user a yes/no question. Returns the user's response."""
+        return query
 
     @tool
     async def get_user_input_from_options(options: str) -> str:
         """Present numbered options to user. Format: '1. Red, 2. Green, 3. Blue'."""
-        await log_chat("Getting user choice")
-        import re
-        option_list = [opt.strip() for opt in re.split(r'\d+\.\s*', options) if opt.strip()]
-        try:
-            return await request_user_input("Select an option:", input_type="options", options=option_list)
-        except Exception as e:
-            return f"{e}"
+        return options
 
     # ── FILE OPERATIONS ──────────────────────────
 

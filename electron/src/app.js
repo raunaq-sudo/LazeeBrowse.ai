@@ -305,8 +305,8 @@ function handleServerMessage(data) {
       expandLogPanel();
       break;
 
-    case "form_input":
-      handleFormInput(data);
+    case "user_input_request":
+      handleUserInputRequest(data);
       break;
 
     case "pong":
@@ -753,17 +753,16 @@ function showError(msg) {
   document.getElementById("connectError").textContent = msg;
 }
 
-// ── FORM INPUT MODAL ─────────────────────────────
-let currentFormRequest = null;
+// ── USER INPUT REQUEST (HITL Interrupt) ─────────
+let currentUserInputRequest = null;
 
-function handleFormInput(data) {
-  const { request_id, content, input_type, options, fields } = data;
-  currentFormRequest = { request_id, input_type };
+function handleUserInputRequest(data) {
+  const { tool, args, description } = data;
+  currentUserInputRequest = { tool, args };
 
   const logs = document.getElementById("logContent");
   const wrapper = document.createElement("div");
   wrapper.className = "log-line form-request";
-  wrapper.id = `form-request-${request_id}`;
 
   const timestamp = document.createElement("span");
   timestamp.className = "response-timestamp";
@@ -771,41 +770,43 @@ function handleFormInput(data) {
 
   const text = document.createElement("div");
   text.className = "form-request-text";
-  text.textContent = content || "AI needs input";
+  text.textContent = description || `AI needs your input for: ${tool}`;
 
   const controls = document.createElement("div");
   controls.className = "form-request-controls";
 
-  if (input_type === "confirmation") {
+  if (tool === "get_user_confirmation") {
     const yesBtn = document.createElement("button");
     yesBtn.className = "form-inline-btn yes";
     yesBtn.textContent = "Yes";
-    yesBtn.onclick = () => submitFormResponse("yes");
+    yesBtn.onclick = () => sendUserInputResponse("respond", "yes");
     const noBtn = document.createElement("button");
     noBtn.className = "form-inline-btn no";
     noBtn.textContent = "No";
-    noBtn.onclick = () => submitFormResponse("no");
+    noBtn.onclick = () => sendUserInputResponse("respond", "no");
     controls.appendChild(yesBtn);
     controls.appendChild(noBtn);
-  } else if (input_type === "options" && options && options.length > 0) {
-    options.forEach((opt) => {
+  } else if (tool === "get_user_input_from_options" && args && args.options) {
+    const options = typeof args.options === "string" ? args.options.split(",").map(s => s.trim()) : args.options;
+    (Array.isArray(options) ? options : []).forEach((opt) => {
       const btn = document.createElement("button");
       btn.className = "form-inline-btn option";
       btn.textContent = opt;
-      btn.onclick = () => submitFormResponse(opt);
+      btn.onclick = () => sendUserInputResponse("respond", opt);
       controls.appendChild(btn);
     });
-  } else if (input_type === "form" && fields && fields.length > 0) {
+  } else if (tool === "fill_any_form" && args && args.form_elements) {
+    const elements = args.form_elements;
     const row = document.createElement("div");
     row.className = "form-inline-row";
-    fields.forEach((field, idx) => {
+    elements.forEach((field, idx) => {
       const input = document.createElement("input");
       input.type = "text";
       input.className = "form-inline-input";
       input.dataset.index = idx;
-      input.placeholder = field.placeholder || field.label || "";
+      input.placeholder = field.selector || field.label || "";
       input.value = field.value || "";
-      if (idx === 0) input.addEventListener("keydown", (e) => { if (e.key === "Enter") controls.querySelector(".form-inline-submit")?.click(); });
+      if (idx === 0) input.addEventListener("keydown", (e) => { if (e.key === "Enter") row.querySelector("button")?.click(); });
       row.appendChild(input);
     });
     const btn = document.createElement("button");
@@ -813,7 +814,9 @@ function handleFormInput(data) {
     btn.textContent = "Send";
     btn.onclick = () => {
       const inputs = row.querySelectorAll(".form-inline-input");
-      submitFormResponse(JSON.stringify(Array.from(inputs).map(i => i.value)));
+      const values = Array.from(inputs).map(i => i.value);
+      const filledElements = elements.map((el, i) => ({ ...el, value: values[i] || el.value || "" }));
+      sendUserInputResponse("edit", JSON.stringify(values), filledElements);
     };
     row.appendChild(btn);
     controls.appendChild(row);
@@ -824,11 +827,11 @@ function handleFormInput(data) {
     input.type = "text";
     input.className = "form-inline-input";
     input.placeholder = "Type your response...";
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") controls.querySelector(".form-inline-submit")?.click(); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") row.querySelector("button")?.click(); });
     const btn = document.createElement("button");
     btn.className = "form-inline-btn submit";
     btn.textContent = "Send";
-    btn.onclick = () => submitFormResponse(input.value);
+    btn.onclick = () => sendUserInputResponse("respond", input.value);
     row.appendChild(input);
     row.appendChild(btn);
     controls.appendChild(row);
@@ -843,32 +846,34 @@ function handleFormInput(data) {
   expandLogPanel();
 }
 
-function submitFormResponse(response) {
-  if (!currentFormRequest) return;
-  const { request_id } = currentFormRequest;
+function sendUserInputResponse(type, content, editedArgs) {
+  if (!currentUserInputRequest) return;
+
+  const payload = {
+    type: "user_input_response",
+    tool: currentUserInputRequest.tool,
+    content: content,
+  };
+  if (type === "edit" && editedArgs) {
+    payload.type = "edit";
+    payload.edited_args = editedArgs;
+  }
 
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: "form_response",
-      request_id: request_id,
-      content: response,
-    }));
+    ws.send(JSON.stringify(payload));
   }
 
-  const formEl = document.getElementById(`form-request-${request_id}`);
-  if (formEl) {
-    const controls = formEl.querySelector(".form-request-controls");
-    if (controls) {
-      controls.querySelectorAll("button").forEach(b => { b.disabled = true; b.classList.add("disabled"); });
-      controls.querySelectorAll("input").forEach(i => { i.disabled = true; });
+  const logs = document.getElementById("logContent");
+  const lastFormRequest = logs.querySelector(".form-request:last-child");
+  if (lastFormRequest) {
+    const ctrl = lastFormRequest.querySelector(".form-request-controls");
+    if (ctrl) {
+      ctrl.querySelectorAll("button").forEach(b => { b.disabled = true; b.classList.add("disabled"); });
+      ctrl.querySelectorAll("input").forEach(i => { i.disabled = true; });
     }
-    const responseLabel = document.createElement("div");
-    responseLabel.className = "form-response-label";
-    responseLabel.textContent = response || "(skipped)";
-    controls.appendChild(responseLabel);
   }
 
-  currentFormRequest = null;
+  currentUserInputRequest = null;
 }
 
 function hideConnectOverlay() {

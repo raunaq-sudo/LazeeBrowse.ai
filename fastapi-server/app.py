@@ -11,6 +11,8 @@ import re
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
+from langgraph.types import Command
+from langgraph.checkpoint.memory import MemorySaver
 from browser_tools_electron import build_tools
 from config import get_models, get_model_list
 from prompts.deep_agent_browser import prompt
@@ -56,12 +58,12 @@ async def list_models():
 # ── STATE ───────────────────────────────────────
 
 chat_manager = None
-pending_inputs: Dict[str, asyncio.Future] = {}
 pending_browser_commands: Dict[str, asyncio.Future] = {}
 active_connections: Dict[str, WebSocket] = {}
 connection_tasks: Dict[str, Set[asyncio.Task]] = {}
 session_modes: Dict[str, str] = {}  # session_id -> "browser_control" | "chat"
 session_project_dirs: Dict[str, str] = {}  # session_id -> project_dir
+user_input_futures: Dict[str, asyncio.Future] = {}  # session_id -> Future for interrupt resume
 
 class ChatManager:
     def __init__(self):
@@ -116,44 +118,6 @@ class SafeWebSocket:
         return self._closed
 
 safe_connections: Dict[str, SafeWebSocket] = {}
-
-# ── USER INPUT ──────────────────────────────────
-
-async def request_user_input(message: str, safe_ws: SafeWebSocket, input_type: str = "text", options: list = None, fields: list = None) -> str:
-    request_id = str(uuid.uuid4())
-    future = asyncio.Future()
-    pending_inputs[request_id] = future
-
-    try:
-        await safe_ws.send({"type": "processing_request_completed"})
-    except Exception:
-        pass
-
-    payload = {
-        "type": "form_input",
-        "request_id": request_id,
-        "role": "assistant",
-        "content": message,
-        "input_type": input_type,
-        "timestamp": datetime.now().isoformat(),
-    }
-    if options:
-        payload["options"] = options
-    if fields:
-        payload["fields"] = fields
-
-    success = await safe_ws.send(payload)
-    if not success:
-        return "WebSocket connection closed"
-
-    try:
-        user_response = await asyncio.wait_for(future, timeout=300.0)
-        await safe_ws.send({"type": "agent_thinking", "timestamp": datetime.now().isoformat()})
-        return user_response
-    except asyncio.TimeoutError:
-        return "User did not respond in time"
-    finally:
-        pending_inputs.pop(request_id, None)
 
 # ── BROWSER COMMAND RELAY ───────────────────────
 
@@ -406,9 +370,6 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
         await safe_ws.send({"type": "agent_thinking", "timestamp": datetime.now().isoformat()})
 
-        async def request_input_wrapper(message: str, input_type: str = "text", options: list = None, fields: list = None) -> str:
-            return await request_user_input(message, safe_ws, input_type=input_type, options=options, fields=fields)
-
         async def log_wrapper(message: str):
             await log_chat(message, safe_ws)
 
@@ -420,7 +381,6 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
         tools = build_tools(
             browser_command=browser_command_wrapper,
-            request_user_input=request_input_wrapper,
             log_chat=log_wrapper,
             base_path=session_project_dir,
         )
@@ -431,26 +391,94 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
         sync_skills_to_project()
 
+        checkpointer = MemorySaver()
+        thread_id = str(uuid.uuid4())
+
         agent = create_deep_agent(
             model=llm,
             tools=tools,
             backend=FilesystemBackend(root_dir=os.path.join(session_project_dir, "files"), virtual_mode=True),
             system_prompt=prompt,
             skills=["/skills/user/"],
+            interrupt_on={
+                "get_user_confirmation": True,
+                "get_user_input_from_options": True,
+                "fill_any_form": True,
+            },
+            checkpointer=checkpointer,
         )
 
         await log_wrapper("Agent running...")
 
         callback_handler = StreamingCallbackHandler(safe_ws)
-        config = {"recursion_limit": 500, "configurable": {"thread_id": str(uuid.uuid4())}, "callbacks": [callback_handler]}
+        config = {"recursion_limit": 500, "configurable": {"thread_id": thread_id}, "callbacks": [callback_handler]}
+
+        input_messages = {"messages": chat_manager.get_chat_history(session_id)}
+        response = None
+
         try:
-            response = await agent.ainvoke(
-                {"messages": chat_manager.get_chat_history(session_id)},
-                config=config,
-            )
+            # Invoke agent — may interrupt for user input
+            response = await agent.ainvoke(input_messages, config=config)
+
+            # Handle potential interrupts
+            while True:
+                state_snapshot = await agent.aget_state(config)
+                if not state_snapshot.next:
+                    break  # Graph finished
+
+                # Graph is interrupted — extract tool call info
+                task = state_snapshot.tasks[0]
+                hitl_request = task.interrupts[0].value if task.interrupts else None
+                if not hitl_request:
+                    break
+
+                action_requests = hitl_request.get("action_requests", [])
+                if not action_requests:
+                    break
+
+                action = action_requests[0]
+                tool_name = action.get("name", "unknown")
+                tool_args = action.get("args", {})
+
+                # Send interrupt info to frontend
+                await safe_ws.send({"type": "processing_request_completed"})
+                await safe_ws.send({
+                    "type": "user_input_request",
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "description": action.get("description", ""),
+                })
+
+                # Wait for user response
+                user_future = asyncio.Future()
+                user_input_futures[session_id] = user_future
+                try:
+                    user_data = await asyncio.wait_for(user_future, timeout=300.0)
+                except asyncio.TimeoutError:
+                    user_data = {"type": "reject", "message": "User did not respond in time"}
+                finally:
+                    user_input_futures.pop(session_id, None)
+
+                decision_type = user_data.get("type", "respond")
+                decision_message = user_data.get("content", "")
+
+                if decision_type == "respond":
+                    decisions = [{"type": "respond", "message": decision_message}]
+                elif decision_type == "edit":
+                    decisions = [{
+                        "type": "edit",
+                        "edited_action": {"name": tool_name, "args": user_data.get("edited_args", tool_args)},
+                    }]
+                else:
+                    decisions = [{"type": decision_type, "message": decision_message}] if decision_type == "reject" else [{"type": "respond", "message": decision_message}]
+
+                await safe_ws.send({"type": "agent_thinking", "timestamp": datetime.now().isoformat()})
+                response = await agent.ainvoke(Command(resume={"decisions": decisions}), config=config)
+
         except Exception as e:
             await log_wrapper(f"Agent error: {str(e)[:200]}")
-            response = f"Agent failed: {e}"
+            if response is None:
+                response = {"messages": []}
 
         final_response = clean_up_response(response)
 
@@ -533,11 +561,9 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     if request_id in pending_browser_commands:
                         pending_browser_commands[request_id].set_result(result)
 
-                elif msg_type == "form_response":
-                    request_id = data.get("request_id")
-                    user_input = data.get("content", "")
-                    if request_id in pending_inputs:
-                        pending_inputs[request_id].set_result(user_input)
+                elif msg_type == "user_input_response":
+                    if session_id in user_input_futures:
+                        user_input_futures[session_id].set_result(data)
 
                 elif msg_type == "clear_history":
                     chat_manager.clear_history(session_id)
@@ -589,6 +615,7 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 connection_tasks.pop(session_id, None)
                 session_modes.pop(session_id, None)
                 session_project_dirs.pop(session_id, None)
+                user_input_futures.pop(session_id, None)
         asyncio.create_task(delayed_cleanup())
 
 @app.get("/")
