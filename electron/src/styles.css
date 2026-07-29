@@ -408,6 +408,9 @@ html, body {
   letter-spacing: 0.04em; color: var(--text-secondary);
   margin-bottom: 4px; text-transform: uppercase; margin-top: 8px;
 }
+.form-group .label-hint {
+  font-weight: 400; text-transform: none; color: var(--text-muted);
+}
 .form-group input, .form-group select {
   width: 100%; background: var(--bg-base); border: 1px solid var(--border-mid);
   border-radius: var(--radius-sm); padding: 8px 12px;

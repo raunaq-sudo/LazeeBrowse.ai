@@ -95,12 +95,6 @@ def build_tools(browser_command, log_chat, base_path=None):
         await browser_command("press_key", {"key": key})
         return f"Pressed {key}"
 
-    @tool
-    async def fill_any_form(form_elements: List[Dict[str, str]]) -> str:
-        """Fill multiple form fields. Each element: {selector, value}. Prompts user if value missing.
-        After getting user input, call type_text for each filled field."""
-        return json.dumps(form_elements)
-
     # ── BROWSER: EXTRACTION ──────────────────────
 
     @tool
@@ -255,7 +249,7 @@ def build_tools(browser_command, log_chat, base_path=None):
 
     return [
         open_url, get_url, get_title, go_back, go_forward,
-        click, type_text, scroll, submit_form, press_key, fill_any_form,
+        click, type_text, scroll, submit_form, press_key,
         get_page_text, get_all_links, get_search_results, get_all_headings, get_ui_schema, get_page_content,
         get_user_confirmation, get_user_input_from_options,
         write_file, read_file, delete_entry,

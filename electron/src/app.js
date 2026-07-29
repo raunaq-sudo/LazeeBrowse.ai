@@ -29,12 +29,21 @@ function getRestBase() {
 }
 
 let savedProjectDir = "";
+let savedSkillsDir = "";
 
 async function selectFolder() {
   const folder = await window.electronAPI.selectFolder();
   if (folder) {
     document.getElementById("projectDir").value = folder;
     savedProjectDir = folder;
+  }
+}
+
+async function selectSkillsFolder() {
+  const folder = await window.electronAPI.selectFolder();
+  if (folder) {
+    document.getElementById("skillsDir").value = folder;
+    savedSkillsDir = folder;
   }
 }
 
@@ -91,12 +100,16 @@ async function loadSettings() {
       document.getElementById("projectDir").value = data.project_dir;
       savedProjectDir = data.project_dir;
     }
+    if (data.skills_dir) {
+      document.getElementById("skillsDir").value = data.skills_dir;
+      savedSkillsDir = data.skills_dir;
+    }
   } catch (e) {
     console.log("Could not load saved settings:", e.message);
   }
 }
 
-async function saveSettings(model_name, project_dir) {
+async function saveSettings(model_name, project_dir, skills_dir) {
   try {
     const base = getRestBase();
     const api_keys = {};
@@ -107,7 +120,7 @@ async function saveSettings(model_name, project_dir) {
     await fetch(`${base}/api/settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_keys, model_name, project_dir }),
+      body: JSON.stringify({ api_keys, model_name, project_dir, skills_dir }),
     });
   } catch (e) {
     console.log("Could not save settings:", e.message);
@@ -231,7 +244,16 @@ function connectToAgent() {
       }));
     }
 
-    saveSettings(model_name, folder_path);
+    // Send skills directory
+    const skills_path = document.getElementById("skillsDir").value.trim() || savedSkillsDir;
+    if (skills_path) {
+      ws.send(JSON.stringify({
+        type: "skillsPath",
+        skills_path: skills_path,
+      }));
+    }
+
+    saveSettings(model_name, folder_path, skills_path);
     projectDirPath = folder_path;
     hideConnectOverlay();
     loadFileTree().then(() => updateSidebarTogglePosition());
@@ -816,31 +838,6 @@ function handleUserInputRequest(data) {
       btn.onclick = () => sendUserInputResponse("respond", opt);
       controls.appendChild(btn);
     });
-  } else if (tool === "fill_any_form" && args && args.form_elements) {
-    const elements = args.form_elements;
-    const row = document.createElement("div");
-    row.className = "form-inline-row";
-    elements.forEach((field, idx) => {
-      const input = document.createElement("input");
-      input.type = "text";
-      input.className = "form-inline-input";
-      input.dataset.index = idx;
-      input.placeholder = field.selector || field.label || "";
-      input.value = field.value || "";
-      if (idx === 0) input.addEventListener("keydown", (e) => { if (e.key === "Enter") row.querySelector("button")?.click(); });
-      row.appendChild(input);
-    });
-    const btn = document.createElement("button");
-    btn.className = "form-inline-btn submit";
-    btn.textContent = "Send";
-    btn.onclick = () => {
-      const inputs = row.querySelectorAll(".form-inline-input");
-      const values = Array.from(inputs).map(i => i.value);
-      const filledElements = elements.map((el, i) => ({ ...el, value: values[i] || el.value || "" }));
-      sendUserInputResponse("edit", JSON.stringify(values), filledElements);
-    };
-    row.appendChild(btn);
-    controls.appendChild(row);
   } else {
     const row = document.createElement("div");
     row.className = "form-inline-row";

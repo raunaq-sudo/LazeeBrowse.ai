@@ -45,14 +45,17 @@ def get_all_settings() -> dict:
         "api_keys": get_api_keys(),
         "model_name": get_setting("model_name") or "",
         "project_dir": get_setting("project_dir") or "",
+        "skills_dir": get_setting("skills_dir") or "",
     }
 
 
-def save_all_settings(model_name: str = None, project_dir: str = None, api_keys: dict = None):
+def save_all_settings(model_name: str = None, project_dir: str = None, api_keys: dict = None, skills_dir: str = None):
     if model_name is not None:
         set_setting("model_name", model_name)
     if project_dir is not None:
         set_setting("project_dir", project_dir)
+    if skills_dir is not None:
+        set_setting("skills_dir", skills_dir)
     if api_keys:
         for provider, key in api_keys.items():
             if provider in PROVIDERS and key:
