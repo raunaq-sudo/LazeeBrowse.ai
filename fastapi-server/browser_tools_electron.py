@@ -80,7 +80,12 @@ def build_tools(browser_command, log_chat, base_path=None):
     @tool
     async def scroll(amount: int = 500) -> str:
         """Scroll down (positive) or up (negative) by N pixels."""
-        await browser_command("scroll", {"amount": amount})
+        await log_chat(f"Scrolling {amount}px")
+        result = await browser_command("scroll", {"amount": amount})
+        if isinstance(result, dict) and result.get("error"):
+            return f"Error: {result['error']}"
+        if isinstance(result, dict):
+            return f"Scrolled {amount}px (delta: {result.get('delta', '?')}, after: {result.get('after', '?')})"
         return f"Scrolled {amount}px"
 
     @tool
@@ -94,6 +99,33 @@ def build_tools(browser_command, log_chat, base_path=None):
         """Press a keyboard key (Enter, Tab, Escape, ArrowDown, etc.)."""
         await browser_command("press_key", {"key": key})
         return f"Pressed {key}"
+
+    @tool
+    async def page_down() -> str:
+        """Scroll down one page (PageDown key)."""
+        await browser_command("press_key", {"key": "PageDown"})
+        return "Page down"
+
+    @tool
+    async def page_up() -> str:
+        """Scroll up one page (PageUp key)."""
+        await browser_command("press_key", {"key": "PageUp"})
+        return "Page up"
+
+    @tool
+    async def select_option(selector: str, value: str = "", label: str = "") -> str:
+        """Select an option in a <select> dropdown by value or label text."""
+        await log_chat(f"Selecting option in {selector}")
+        result = await browser_command("select_option", {"selector": selector, "value": value, "label": label})
+        if isinstance(result, dict) and result.get("error"):
+            return f"Error: {result['error']}"
+        return f"Selected option in {selector}"
+
+    @tool
+    async def get_dropdown_options(selector: str) -> list:
+        """Get all options from a <select> dropdown. Returns [{value, label, selected}]."""
+        await log_chat(f"Getting dropdown options for {selector}")
+        return await browser_command("get_dropdown_options", {"selector": selector})
 
     # ── BROWSER: EXTRACTION ──────────────────────
 
@@ -123,7 +155,7 @@ def build_tools(browser_command, log_chat, base_path=None):
 
     @tool
     async def get_ui_schema(mode: str = "visible") -> list:
-        """Extract interactive elements. Modes: visible (default), full."""
+        """Extract interactive elements from the page (buttons, inputs, links, etc.). Modes: visible (default), full."""
         await log_chat("Getting UI schema")
         return await browser_command("get_schema", {"mode": mode})
 
@@ -249,7 +281,8 @@ def build_tools(browser_command, log_chat, base_path=None):
 
     return [
         open_url, get_url, get_title, go_back, go_forward,
-        click, type_text, scroll, submit_form, press_key,
+        click, type_text, scroll, submit_form, press_key, page_down, page_up,
+        select_option, get_dropdown_options,
         get_page_text, get_all_links, get_search_results, get_all_headings, get_ui_schema, get_page_content,
         get_user_confirmation, get_user_input_from_options,
         write_file, read_file, delete_entry,

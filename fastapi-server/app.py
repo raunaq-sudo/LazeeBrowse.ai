@@ -48,7 +48,6 @@ async def save_settings(request: Request):
         model_name=body.get("model_name"),
         project_dir=body.get("project_dir"),
         api_keys=api_keys or None,
-        skills_dir=body.get("skills_dir"),
     )
     return {"ok": True}
 
@@ -64,7 +63,6 @@ active_connections: Dict[str, WebSocket] = {}
 connection_tasks: Dict[str, Set[asyncio.Task]] = {}
 session_modes: Dict[str, str] = {}  # session_id -> "browser_control" | "chat"
 session_project_dirs: Dict[str, str] = {}  # session_id -> project_dir
-session_skills_dirs: Dict[str, str] = {}  # session_id -> skills_dir
 user_input_futures: Dict[str, asyncio.Future] = {}  # session_id -> Future for interrupt resume
 
 class ChatManager:
@@ -170,20 +168,6 @@ def resolve_user_path(relative_path: str):
     if not os.path.abspath(full_path).startswith(os.path.abspath(base)):
         raise Exception("Invalid file path (security violation)")
     return full_path
-
-def sync_skills_to_project(dest_dir=None):
-    import shutil
-    skills_source = os.path.join(os.path.dirname(__file__), "skills")
-    if not os.path.isdir(skills_source):
-        return
-    if dest_dir is None:
-        dest_dir = os.path.join(get_user_files_dir(), "skills", "user")
-    os.makedirs(dest_dir, exist_ok=True)
-    for skill_name in os.listdir(skills_source):
-        src = os.path.join(skills_source, skill_name)
-        dst = os.path.join(dest_dir, skill_name)
-        if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
 
 def get_resource_path(relative_path: str) -> str:
     import sys
@@ -392,21 +376,14 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             await safe_ws.send({"type": "error", "content": "LLM not configured. Please check your API key and model settings.", "timestamp": datetime.now().isoformat()})
             return
 
-        session_skills_dir = session_skills_dirs.get(session_id) or db.get_setting("skills_dir") or ""
-        if session_skills_dir:
-            sync_skills_to_project(dest_dir=session_skills_dir)
-
         checkpointer = MemorySaver()
         thread_id = str(uuid.uuid4())
-
-        skills_param = [(session_skills_dir, "User")] if session_skills_dir else ["/skills/user/"]
 
         agent = create_deep_agent(
             model=llm,
             tools=tools,
             backend=FilesystemBackend(root_dir=os.path.join(session_project_dir, "files"), virtual_mode=True),
             system_prompt=prompt,
-            skills=skills_param,
             interrupt_on={
                 "get_user_confirmation": True,
                 "get_user_input_from_options": True,
@@ -417,7 +394,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         await log_wrapper("Agent running...")
 
         callback_handler = StreamingCallbackHandler(safe_ws)
-        config = {"recursion_limit": 500, "configurable": {"thread_id": thread_id}, "callbacks": [callback_handler]}
+        config = {"recursion_limit": 1000, "configurable": {"thread_id": thread_id}, "callbacks": [callback_handler]}
 
         input_messages = {"messages": chat_manager.get_chat_history(session_id)}
         response = None
@@ -596,10 +573,6 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     session_project_dirs[session_id] = data.get("folder_path", "").strip()
                     print(f"[PROJECT DIR] {session_id}: {session_project_dirs[session_id]}")
 
-                elif msg_type == "skillsPath":
-                    session_skills_dirs[session_id] = data.get("skills_path", "").strip()
-                    print(f"[SKILLS DIR] {session_id}: {session_skills_dirs[session_id]}")
-
                 elif msg_type == "ping":
                     await safe_ws.send({"type": "pong", "timestamp": datetime.now().isoformat()})
 
@@ -625,7 +598,6 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 connection_tasks.pop(session_id, None)
                 session_modes.pop(session_id, None)
                 session_project_dirs.pop(session_id, None)
-                session_skills_dirs.pop(session_id, None)
                 user_input_futures.pop(session_id, None)
         asyncio.create_task(delayed_cleanup())
 
