@@ -123,41 +123,50 @@
 <!-- CONNECT SCREEN (overlay) -->
 <div class="connect-overlay" id="connectOverlay">
   <div class="connect-card">
-    <div class="connect-header">
-      <div class="connect-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.2"/>
-          <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-        </svg>
+    <div class="connect-left">
+      <div class="connect-left-header">
+        <h2>Recent Projects</h2>
       </div>
-      <h1>AI Browser</h1>
-      <p>Connect to your AI agent</p>
+      <div class="recent-projects-list" id="recentProjectsList">
+        <div class="recent-project-empty">No recent projects</div>
+      </div>
     </div>
+    <div class="connect-right">
+      <div class="connect-right-header">
+        <div class="connect-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.2"/>
+            <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h1>AI Browser</h1>
+      </div>
 
-    <div class="form-group">
-      <label for="serverInput">SERVER URL</label>
-      <input type="text" id="serverInput" value="ws://localhost:8000" autocomplete="off" />
-      <label for="modelName">MODEL</label>
-      <select id="modelName" autocomplete="off"></select>
-      <label for="llmApiKey">API KEY</label>
-      <input type="password" id="llmApiKey" value="" placeholder="Enter your API key" autocomplete="off" />
-      <label for="projectDir">PROJECT DIRECTORY</label>
-      <div class="folder-input-row">
-        <input type="text" id="projectDir" placeholder="Select project folder..." readonly autocomplete="off" />
-        <button class="folder-btn" id="folderBtn" onclick="selectFolder()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div class="form-group">
+        <label for="modelName">MODEL</label>
+        <select id="modelName" autocomplete="off"></select>
+        <label for="llmApiKey">API KEY</label>
+        <input type="password" id="llmApiKey" value="" placeholder="Enter your API key" autocomplete="off" />
+        <label>PROJECT</label>
+        <div class="project-display" id="projectDisplay" onclick="selectFolder()">
+          <div class="project-name" id="projectName">Select a project folder</div>
+          <div class="project-path" id="projectPath"></div>
+        </div>
+        <button class="create-project-btn" onclick="selectFolder()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Create New Project
         </button>
       </div>
+
+      <button class="connect-btn" id="connectBtn" onclick="connectToAgent()">
+        <span>Connect</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+          <path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
+      <div class="connect-error" id="connectError"></div>
     </div>
-
-    <button class="connect-btn" id="connectBtn" onclick="connectToAgent()">
-      <span>Connect</span>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-        <path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </button>
-
-    <div class="connect-error" id="connectError"></div>
   </div>
 </div>
 

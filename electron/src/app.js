@@ -24,8 +24,7 @@ function getSessionId() {
 
 // ── SETTINGS ────────────────────────────────────
 function getRestBase() {
-  const raw = document.getElementById("serverInput").value.trim().replace(/\/$/, "");
-  return raw.replace(/^ws/, "http");
+  return "http://localhost:8000";
 }
 
 let savedProjectDir = "";
@@ -33,9 +32,72 @@ let savedProjectDir = "";
 async function selectFolder() {
   const folder = await window.electronAPI.selectFolder();
   if (folder) {
-    document.getElementById("projectDir").value = folder;
     savedProjectDir = folder;
+    updateProjectDisplay(folder);
   }
+}
+
+function updateProjectDisplay(path) {
+  const nameEl = document.getElementById("projectName");
+  const pathEl = document.getElementById("projectPath");
+  if (path) {
+    const name = path.split("/").pop() || path.split("\\").pop() || path;
+    nameEl.textContent = name;
+    pathEl.textContent = path;
+    nameEl.classList.remove("project-name-empty");
+  } else {
+    nameEl.textContent = "Select a project folder";
+    pathEl.textContent = "";
+    nameEl.classList.add("project-name-empty");
+  }
+}
+
+// ── RECENT PROJECTS ────────────────────────────
+function getRecentProjects() {
+  try { return JSON.parse(localStorage.getItem("recentProjects") || "[]"); }
+  catch { return []; }
+}
+
+function saveRecentProjects(projects) {
+  localStorage.setItem("recentProjects", JSON.stringify(projects));
+}
+
+function addRecentProject(path) {
+  if (!path) return;
+  const name = path.split("/").pop() || path.split("\\").pop() || path;
+  let projects = getRecentProjects().filter(p => p.path !== path);
+  projects.unshift({ name, path, lastOpened: Date.now() });
+  if (projects.length > 20) projects = projects.slice(0, 20);
+  saveRecentProjects(projects);
+  renderRecentProjects();
+}
+
+function removeRecentProject(path) {
+  let projects = getRecentProjects().filter(p => p.path !== path);
+  saveRecentProjects(projects);
+  renderRecentProjects();
+}
+
+function renderRecentProjects() {
+  const list = document.getElementById("recentProjectsList");
+  const projects = getRecentProjects();
+  if (!projects.length) {
+    list.innerHTML = '<div class="recent-project-empty">No recent projects</div>';
+    return;
+  }
+  list.innerHTML = projects.map(p =>
+    `<div class="recent-project" onclick="selectRecentProject('${p.path.replace(/'/g, "\\'")}')">
+      <span class="recent-project-remove" onclick="event.stopPropagation(); removeRecentProject('${p.path.replace(/'/g, "\\'")}')">×</span>
+      <div class="recent-project-name">${p.name}</div>
+      <div class="recent-project-path">${p.path}</div>
+    </div>`
+  ).join("");
+}
+
+function selectRecentProject(path) {
+  savedProjectDir = path;
+  updateProjectDisplay(path);
+  document.querySelectorAll(".recent-project").forEach(el => el.classList.remove("active"));
 }
 
 let modelProviderMap = {};
@@ -88,8 +150,8 @@ async function loadSettings() {
     }
     swapApiKeyForModel(document.getElementById("modelName").value);
     if (data.project_dir) {
-      document.getElementById("projectDir").value = data.project_dir;
       savedProjectDir = data.project_dir;
+      updateProjectDisplay(data.project_dir);
     }
   } catch (e) {
     console.log("Could not load saved settings:", e.message);
@@ -166,12 +228,10 @@ function escapeJsString(str) {
 let projectDirPath = "";
 
 function connectToAgent() {
-  const serverRaw = document.getElementById("serverInput").value.trim();
   const api_key = document.getElementById("llmApiKey").value.trim();
   const model_name = document.getElementById("modelName").value;
-  const project_dir = document.getElementById("projectDir").value.trim();
+  const project_dir = savedProjectDir;
   const provider = modelProviderMap[model_name] || "deepseek";
-  if (!serverRaw) return showError("Please enter a server URL.");
   if (!project_dir) return showError("Please select a project directory.");
 
   if (api_key) localStorage.setItem(`api_key_${provider}`, api_key);
@@ -183,7 +243,7 @@ function connectToAgent() {
   if (isConnecting) return;
   isConnecting = true;
 
-  const server = serverRaw.replace(/\/$/, "");
+  const server = "ws://localhost:8000";
   sessionId = getSessionId();
   const url = `${server}/ws/${sessionId}`;
 
@@ -206,8 +266,7 @@ function connectToAgent() {
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     updateBadge("connected", "Connected");
 
-    const project_dir = document.getElementById("projectDir").value.trim();
-    const folder_path = project_dir || savedProjectDir;
+    const folder_path = savedProjectDir;
 
     // Send auth
     ws.send(JSON.stringify({
@@ -232,6 +291,7 @@ function connectToAgent() {
     }
 
     saveSettings(model_name, folder_path);
+    addRecentProject(folder_path);
     projectDirPath = folder_path;
     hideConnectOverlay();
     loadFileTree().then(() => updateSidebarTogglePosition());
@@ -884,6 +944,7 @@ function hideConnectOverlay() {
 
 function showConnectOverlay() {
   document.getElementById("connectOverlay").classList.remove("hidden");
+  renderRecentProjects();
 }
 
 function toggleLogPanel() {
