@@ -55,6 +55,36 @@ async def save_settings(request: Request):
 async def list_models():
     return {"models": get_model_list()}
 
+@app.get("/api/recent-projects")
+async def list_recent_projects():
+    return {"projects": db.get_recent_projects()}
+
+@app.post("/api/recent-projects")
+async def add_recent_project(request: Request):
+    body = await request.json()
+    path = body.get("path", "").strip()
+    name = body.get("name", "")
+    if not path:
+        return JSONResponse({"error": "Missing path"}, status_code=400)
+    if not name:
+        name = path.split("/").pop() or path.split("\\").pop() or path
+    db.upsert_recent_project(path, name)
+    return {"ok": True}
+
+@app.delete("/api/recent-projects")
+async def remove_recent_project(request: Request):
+    body = await request.json()
+    path = body.get("path", "").strip()
+    if not path:
+        return JSONResponse({"error": "Missing path"}, status_code=400)
+    # Safety check: only delete paths that look like project directories
+    if not os.path.isdir(path) or len(path) < 5:
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+    import shutil
+    shutil.rmtree(path, ignore_errors=True)
+    db.delete_recent_project(path)
+    return {"ok": True}
+
 # ── STATE ───────────────────────────────────────
 
 chat_manager = None
@@ -68,15 +98,140 @@ user_input_futures: Dict[str, asyncio.Future] = {}  # session_id -> Future for i
 class ChatManager:
     def __init__(self):
         self.chat_histories: Dict[str, List[dict]] = {}
+        self.activity_logs: Dict[str, List[dict]] = {}
+        self.message_counters: Dict[str, int] = {}
+        self.db_paths: Dict[str, str] = {}
+
+    def _get_db_path(self, session_id: str) -> str | None:
+        return self.db_paths.get(session_id)
+
+    def _ensure_tables(self, db_path: str):
+        import sqlite3
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT,
+                tool_calls TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                content TEXT,
+                name TEXT,
+                input_text TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+    def init_session(self, session_id: str, project_dir: str):
+        if not project_dir:
+            return
+        db_path = os.path.join(project_dir, "chat_session.db")
+        self.db_paths[session_id] = db_path
+        self._ensure_tables(db_path)
+        self.chat_histories[session_id] = self._load_history(db_path)
+        self.activity_logs[session_id] = self._load_activity_log(db_path)
+        self.message_counters[session_id] = 0
+
+    def _load_history(self, db_path: str) -> List[dict]:
+        import sqlite3, json
+        try:
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute("SELECT role, content, tool_calls, created_at FROM messages ORDER BY id").fetchall()
+            conn.close()
+            messages = []
+            for role, content, tool_calls_str, created_at in rows:
+                msg = {"role": role, "content": content or ""}
+                if tool_calls_str:
+                    try:
+                        msg["tool_calls"] = json.loads(tool_calls_str)
+                    except json.JSONDecodeError:
+                        pass
+                messages.append(msg)
+            return messages
+        except Exception:
+            return []
+
+    def _load_activity_log(self, db_path: str) -> List[dict]:
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute("SELECT type, content, name, input_text, created_at FROM activity_log ORDER BY id").fetchall()
+            conn.close()
+            return [
+                {"type": typ, "content": content, "name": name, "input_text": input_text, "created_at": created_at}
+                for typ, content, name, input_text, created_at in rows
+            ]
+        except Exception:
+            return []
+
+    def _flush(self, session_id: str):
+        db_path = self._get_db_path(session_id)
+        if not db_path:
+            return
+        import sqlite3, json
+        try:
+            conn = sqlite3.connect(db_path)
+            # Flush messages
+            history = self.chat_histories.get(session_id, [])
+            existing = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            if len(history) > existing:
+                for msg in history[existing:]:
+                    conn.execute(
+                        "INSERT INTO messages (role, content, tool_calls) VALUES (?, ?, ?)",
+                        (msg["role"], msg.get("content"), json.dumps(msg.get("tool_calls")) if msg.get("tool_calls") else None)
+                    )
+            # Flush activity logs
+            logs = self.activity_logs.get(session_id, [])
+            existing_logs = conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
+            if len(logs) > existing_logs:
+                for entry in logs[existing_logs:]:
+                    conn.execute(
+                        "INSERT INTO activity_log (type, content, name, input_text) VALUES (?, ?, ?, ?)",
+                        (entry.get("type", "log"), entry.get("content"), entry.get("name"), entry.get("input_text"))
+                    )
+            conn.commit()
+            conn.close()
+            self.message_counters[session_id] = 0
+        except Exception as e:
+            print(f"[FLUSH ERROR] {session_id}: {e}")
 
     def get_chat_history(self, session_id: str) -> List[dict]:
         return self.chat_histories.setdefault(session_id, [])
 
     def update_chat_history(self, message: dict, session_id: str):
         self.chat_histories.setdefault(session_id, []).append(message)
+        self.message_counters[session_id] = self.message_counters.get(session_id, 0) + 1
+        if self.message_counters[session_id] >= 20:
+            self._flush(session_id)
+
+    def add_activity_log(self, session_id: str, entry: dict):
+        self.activity_logs.setdefault(session_id, []).append(entry)
 
     def clear_history(self, session_id: str):
         self.chat_histories[session_id] = []
+        self.activity_logs[session_id] = []
+        db_path = self._get_db_path(session_id)
+        if db_path:
+            import sqlite3
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.execute("DELETE FROM messages")
+                conn.execute("DELETE FROM activity_log")
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+        self.message_counters[session_id] = 0
+
+    def flush(self, session_id: str):
+        self._flush(session_id)
 
 chat_manager = ChatManager()
 
@@ -148,11 +303,9 @@ async def send_browser_command(command: str, params: dict, safe_ws: SafeWebSocke
         pending_browser_commands.pop(request_id, None)
 
 async def log_chat(message: str, safe_ws: SafeWebSocket):
-    await safe_ws.send({
-        "type": "log",
-        "content": message,
-        "timestamp": datetime.now().isoformat(),
-    })
+    timestamp = datetime.now().isoformat()
+    await safe_ws.send({"type": "log", "content": message, "timestamp": timestamp})
+    chat_manager.add_activity_log(safe_ws.session_id, {"type": "log", "content": message, "created_at": timestamp})
 
 # ── FILE HELPERS ────────────────────────────────
 
@@ -317,6 +470,10 @@ class StreamingCallbackHandler(BaseCallbackHandler):
     async def on_tool_start(self, serialized: dict, input_str: str, **kwargs):
         name = serialized.get("name", "unknown")
         await self.safe_ws.send({"type": "tool_call", "name": name, "input": input_str[:200]})
+        chat_manager.add_activity_log(self.safe_ws.session_id, {
+            "type": "tool_call", "name": name, "input_text": input_str[:200],
+            "created_at": datetime.now().isoformat()
+        })
 
     async def on_tool_end(self, output: str, **kwargs):
         pass
@@ -572,6 +729,24 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 elif msg_type == "folderPath":
                     session_project_dirs[session_id] = data.get("folder_path", "").strip()
                     print(f"[PROJECT DIR] {session_id}: {session_project_dirs[session_id]}")
+                    project_dir_path = session_project_dirs[session_id]
+                    chat_manager.init_session(session_id, project_dir_path)
+                    # Send stored activity logs to frontend
+                    stored_logs = chat_manager.activity_logs.get(session_id, [])
+                    for entry in stored_logs:
+                        etype = entry.get("type", "log")
+                        if etype == "tool_call":
+                            await safe_ws.send({
+                                "type": "tool_call",
+                                "name": entry.get("name", "unknown"),
+                                "input": entry.get("input_text", ""),
+                            })
+                        else:
+                            await safe_ws.send({
+                                "type": "log",
+                                "content": entry.get("content", ""),
+                                "timestamp": entry.get("created_at", datetime.now().isoformat()),
+                            })
 
                 elif msg_type == "ping":
                     await safe_ws.send({"type": "pong", "timestamp": datetime.now().isoformat()})
@@ -585,6 +760,7 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 print(f"[ERROR] {session_id}: {e}")
 
     finally:
+        chat_manager.flush(session_id)
         await safe_ws.close()
         tasks = connection_tasks.pop(session_id, set())
         for task in tasks:

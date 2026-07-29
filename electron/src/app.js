@@ -53,34 +53,63 @@ function updateProjectDisplay(path) {
 }
 
 // ── RECENT PROJECTS ────────────────────────────
-function getRecentProjects() {
-  try { return JSON.parse(localStorage.getItem("recentProjects") || "[]"); }
-  catch { return []; }
+async function migrateRecentProjects() {
+  try {
+    const old = JSON.parse(localStorage.getItem("recentProjects") || "[]");
+    if (!old.length) return;
+    const base = getRestBase();
+    for (const p of old) {
+      await fetch(`${base}/api/recent-projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: p.path, name: p.name }),
+      });
+    }
+    localStorage.removeItem("recentProjects");
+  } catch {}
 }
 
-function saveRecentProjects(projects) {
-  localStorage.setItem("recentProjects", JSON.stringify(projects));
+async function getRecentProjects() {
+  try {
+    const base = getRestBase();
+    const res = await fetch(`${base}/api/recent-projects`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.projects || [];
+  } catch { return []; }
 }
 
-function addRecentProject(path) {
+async function addRecentProject(path) {
   if (!path) return;
   const name = path.split("/").pop() || path.split("\\").pop() || path;
-  let projects = getRecentProjects().filter(p => p.path !== path);
-  projects.unshift({ name, path, lastOpened: Date.now() });
-  if (projects.length > 20) projects = projects.slice(0, 20);
-  saveRecentProjects(projects);
-  renderRecentProjects();
+  try {
+    const base = getRestBase();
+    await fetch(`${base}/api/recent-projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, name }),
+    });
+  } catch {}
+  await renderRecentProjects();
 }
 
-function removeRecentProject(path) {
-  let projects = getRecentProjects().filter(p => p.path !== path);
-  saveRecentProjects(projects);
-  renderRecentProjects();
+async function removeRecentProject(path) {
+  const confirmed = confirm("Delete this project permanently?\nThis will remove the project folder and all its contents.");
+  if (!confirmed) return;
+  try {
+    const base = getRestBase();
+    await fetch(`${base}/api/recent-projects`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+  } catch {}
+  await renderRecentProjects();
 }
 
-function renderRecentProjects() {
+async function renderRecentProjects() {
   const list = document.getElementById("recentProjectsList");
-  const projects = getRecentProjects();
+  const projects = await getRecentProjects();
   if (!projects.length) {
     list.innerHTML = '<div class="recent-project-empty">No recent projects</div>';
     return;
@@ -177,6 +206,7 @@ async function saveSettings(model_name, project_dir) {
 }
 
 loadModels().then(() => loadSettings());
+migrateRecentProjects().then(() => renderRecentProjects());
 
 // ── WEBVIEW SETUP ───────────────────────────────
 function getBrowserView() {

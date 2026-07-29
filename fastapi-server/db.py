@@ -57,3 +57,36 @@ def save_all_settings(model_name: str = None, project_dir: str = None, api_keys:
         for provider, key in api_keys.items():
             if provider in PROVIDERS and key:
                 set_api_key(provider, key)
+
+
+# ── RECENT PROJECTS ────────────────────────────
+
+def _ensure_recent_projects_table(conn):
+    conn.execute("CREATE TABLE IF NOT EXISTS recent_projects (path TEXT PRIMARY KEY, name TEXT NOT NULL, last_opened TEXT NOT NULL)")
+
+
+def get_recent_projects() -> list[dict]:
+    conn = _connect()
+    _ensure_recent_projects_table(conn)
+    rows = conn.execute("SELECT path, name, last_opened FROM recent_projects ORDER BY last_opened DESC LIMIT 20").fetchall()
+    conn.close()
+    return [{"path": r[0], "name": r[1], "lastOpened": r[2]} for r in rows]
+
+
+def upsert_recent_project(path: str, name: str):
+    conn = _connect()
+    _ensure_recent_projects_table(conn)
+    conn.execute("DELETE FROM recent_projects WHERE path = ?", (path,))
+    conn.execute("INSERT INTO recent_projects (path, name, last_opened) VALUES (?, ?, datetime('now'))", (path, name))
+    # Keep only 20
+    conn.execute("DELETE FROM recent_projects WHERE path NOT IN (SELECT path FROM recent_projects ORDER BY last_opened DESC LIMIT 20)")
+    conn.commit()
+    conn.close()
+
+
+def delete_recent_project(path: str):
+    conn = _connect()
+    _ensure_recent_projects_table(conn)
+    conn.execute("DELETE FROM recent_projects WHERE path = ?", (path,))
+    conn.commit()
+    conn.close()
