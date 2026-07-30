@@ -180,6 +180,8 @@ html, body {
 }
 .send-btn:hover { background: var(--accent-soft); }
 .send-btn:disabled { opacity: 0.4; pointer-events: none; }
+.send-btn.stop-btn { background: var(--danger, #e44); }
+.send-btn.stop-btn:hover { background: var(--danger-hover, #c33); }
 
 .deepdive-btn {
   -webkit-app-region: no-drag;

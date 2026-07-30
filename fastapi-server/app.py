@@ -800,6 +800,13 @@ async def agent_session(websocket: WebSocket, session_id: str):
                                 "timestamp": entry.get("created_at", datetime.now().isoformat()),
                             })
 
+                elif msg_type == "stop":
+                    tasks = connection_tasks.get(session_id, set()).copy()
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await safe_ws.send({"type": "log", "content": "Execution stopped by user.", "timestamp": datetime.now().isoformat()})
+
                 elif msg_type == "ping":
                     await safe_ws.send({"type": "pong", "timestamp": datetime.now().isoformat()})
 

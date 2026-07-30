@@ -861,7 +861,26 @@ function setThinking(thinking) {
   bar.classList.toggle("visible", thinking);
   status.textContent = thinking ? "AI is working..." : "Ready";
   status.classList.toggle("thinking", thinking);
-  sendBtn.disabled = thinking;
+
+  if (thinking) {
+    sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
+    sendBtn.onclick = stopAgent;
+    sendBtn.disabled = false;
+    sendBtn.classList.add("stop-btn");
+  } else {
+    sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    sendBtn.onclick = sendInstruction;
+    sendBtn.disabled = false;
+    sendBtn.classList.remove("stop-btn");
+  }
+}
+
+function stopAgent() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "stop" }));
+  setThinking(false);
+  const input = document.getElementById("instructionInput");
+  input.disabled = false;
 }
 
 function updateBadge(state, text) {
