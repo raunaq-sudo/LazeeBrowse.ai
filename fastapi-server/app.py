@@ -255,11 +255,6 @@ class SafeWebSocket:
                 self._closed = True
                 return False
 
-    async def replace(self, websocket: WebSocket):
-        async with self._lock:
-            self.websocket = websocket
-            self._closed = False
-
     async def close(self):
         if not self._closed:
             self._closed = True
@@ -658,12 +653,12 @@ async def agent_session(websocket: WebSocket, session_id: str):
     await websocket.accept()
     global project_dir
 
-    if session_id in safe_connections:
-        safe_ws = safe_connections[session_id]
-        await safe_ws.replace(websocket)
-    else:
-        safe_ws = SafeWebSocket(websocket, session_id)
-        safe_connections[session_id] = safe_ws
+    # Create a fresh SafeWebSocket for this connection
+    safe_ws = SafeWebSocket(websocket, session_id)
+    old_safe_ws = safe_connections.get(session_id)
+    if old_safe_ws is not None:
+        old_safe_ws._closed = True  # Mark old as closed so old tasks stop sending
+    safe_connections[session_id] = safe_ws
 
     active_connections[session_id] = websocket
     connection_tasks.setdefault(session_id, set())
@@ -768,7 +763,7 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 task.cancel()
         async def delayed_cleanup():
             await asyncio.sleep(30)
-            if safe_ws.is_closed:
+            if safe_connections.get(session_id) is safe_ws:
                 safe_connections.pop(session_id, None)
                 active_connections.pop(session_id, None)
                 connection_tasks.pop(session_id, None)
