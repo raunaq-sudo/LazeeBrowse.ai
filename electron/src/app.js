@@ -9,6 +9,7 @@ let isConnecting = false;
 let browserView = null;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
+let deepDive = false;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const BASE_RECONNECT_DELAY = 1000;
 
@@ -831,8 +832,9 @@ async function sendInstruction() {
   if (!content || !ws || ws.readyState !== WebSocket.OPEN || isThinking) return;
 
   const filesToSend = [...attachedFiles];
-  addLog(`You: ${content}${filesToSend.length ? ` [${filesToSend.length} file(s) attached]` : ""}`);
-  ws.send(JSON.stringify({ type: "message", content, attached_files: filesToSend }));
+  const label = deepDive ? "🧠" : "";
+  addLog(`${label}You: ${content}${filesToSend.length ? ` [${filesToSend.length} file(s) attached]` : ""}`);
+  ws.send(JSON.stringify({ type: "message", content, attached_files: filesToSend, deep_dive: deepDive }));
   resetThinkingTokens();
 
   input.value = "";
@@ -840,6 +842,13 @@ async function sendInstruction() {
   document.getElementById("charCount").textContent = "";
   attachedFiles = [];
   renderAttachedFiles();
+}
+
+function toggleDeepDive() {
+  deepDive = !deepDive;
+  const btn = document.getElementById("deepDiveBtn");
+  btn.classList.toggle("active", deepDive);
+  btn.querySelector("span").textContent = deepDive ? "Dive" : "Dive";
 }
 
 // ── UI HELPERS ──────────────────────────────────

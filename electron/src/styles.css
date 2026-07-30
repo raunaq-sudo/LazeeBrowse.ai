@@ -181,6 +181,18 @@ html, body {
 .send-btn:hover { background: var(--accent-soft); }
 .send-btn:disabled { opacity: 0.4; pointer-events: none; }
 
+.deepdive-btn {
+  -webkit-app-region: no-drag;
+  display: flex; align-items: center; gap: 3px;
+  padding: 2px 8px; border: 1px solid var(--border-mid); border-radius: 10px;
+  background: none; color: var(--text-muted); cursor: pointer;
+  font-size: 10px; font-family: var(--font-sans); flex-shrink: 0;
+  transition: var(--transition); line-height: 1;
+}
+.deepdive-btn:hover { color: var(--accent); border-color: var(--accent); }
+.deepdive-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.deepdive-btn svg { flex-shrink: 0; }
+
 /* THINKING BAR */
 .thinking-bar {
   display: none; align-items: center; gap: 8px;

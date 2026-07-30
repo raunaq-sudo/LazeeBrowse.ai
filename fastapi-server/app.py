@@ -13,9 +13,11 @@ from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langgraph.types import Command
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import AIMessage
 from browser_tools_electron import build_tools
 from config import get_models, get_model_list
 from prompts.deep_agent_browser import prompt
+from tot_agent import create_tot_agent
 import db
 
 llm = None
@@ -473,7 +475,7 @@ class StreamingCallbackHandler(BaseCallbackHandler):
     async def on_tool_end(self, output: str, **kwargs):
         pass
 
-async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket, attached_files: list = None):
+async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket, attached_files: list = None, deep_dive: bool = False):
     try:
         if safe_ws.is_closed:
             return
@@ -526,6 +528,60 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
         if llm is None:
             await safe_ws.send({"type": "error", "content": "LLM not configured. Please check your API key and model settings.", "timestamp": datetime.now().isoformat()})
+            return
+
+        if deep_dive:
+            await log_wrapper("Deep Dive mode active — generating multiple strategies...")
+
+            async def tot_event(typ: str, data: str):
+                if safe_ws.is_closed:
+                    return
+                if typ == "tot_phase":
+                    await safe_ws.send({"type": "log", "content": f"🔍 {data}", "timestamp": datetime.now().isoformat()})
+                elif typ == "tot_branches":
+                    names = json.loads(data)
+                    lines = "\n".join(f"  • {n}" for n in names)
+                    await safe_ws.send({"type": "log", "content": f"Strategies identified:\n{lines}", "timestamp": datetime.now().isoformat()})
+                elif typ == "tot_scores":
+                    scores = json.loads(data)
+                    lines = "\n".join(f"  • {k}: {v}" for k, v in scores.items())
+                    await safe_ws.send({"type": "log", "content": f"Strategy scores:\n{lines}", "timestamp": datetime.now().isoformat()})
+                elif typ == "tot_selected":
+                    await safe_ws.send({"type": "log", "content": f"→ Selected: {data}", "timestamp": datetime.now().isoformat()})
+                    await safe_ws.send({"type": "thinking_token", "content": f"[Selected strategy: {data}]"})
+                elif typ == "tot_backtrack":
+                    await safe_ws.send({"type": "log", "content": f"↩ Backtracking from: {data}", "timestamp": datetime.now().isoformat()})
+                elif typ == "tot_progress":
+                    await safe_ws.send({"type": "log", "content": data, "timestamp": datetime.now().isoformat()})
+                elif typ == "tot_done":
+                    await safe_ws.send({"type": "thinking_token", "content": "[ToT complete — synthesizing answer]"})
+
+            tot_agent = create_tot_agent(llm, tools, session_project_dir=session_project_dir, on_event=tot_event)
+            tot_state = {
+                "messages": chat_manager.get_chat_history(session_id),
+                "question": user_message,
+                "branches": [],
+                "selected_plan": "",
+                "selected_steps": [],
+                "current_idx": -1,
+                "final_answer": "",
+                "errors": [],
+                "feedback_score": 0,
+                "replan_count": 0,
+            }
+            result = await tot_agent.ainvoke(tot_state)
+            final_text = result.get("final_answer", "No answer generated.")
+            response = {"messages": [AIMessage(content=final_text)], "text": final_text, "tool_calls": []}
+
+            chat_manager.update_chat_history({"role": "assistant", "content": final_text, "tool_calls": []}, session_id)
+            if not safe_ws.is_closed:
+                await safe_ws.send({
+                    "type": "message",
+                    "role": "assistant",
+                    "id": str(uuid.uuid4()),
+                    "content": final_text,
+                    "timestamp": datetime.now().isoformat(),
+                })
             return
 
         checkpointer = MemorySaver()
@@ -682,7 +738,8 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     if not content:
                         continue
                     attached = data.get("attached_files", [])
-                    task = asyncio.create_task(generate_agent_response(session_id, content, safe_ws, attached_files=attached))
+                    deep_dive = data.get("deep_dive", False)
+                    task = asyncio.create_task(generate_agent_response(session_id, content, safe_ws, attached_files=attached, deep_dive=deep_dive))
                     connection_tasks[session_id].add(task)
                     task.add_done_callback(connection_tasks[session_id].discard)
 
