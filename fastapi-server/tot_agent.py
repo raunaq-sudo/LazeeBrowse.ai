@@ -239,14 +239,16 @@ After completing all steps, provide a comprehensive final answer summarizing wha
             if 0 <= idx < len(branches):
                 branches[idx]["status"] = "succeeded"
             await _log("tot_progress", f"Strategy produced result: {plan_name}")
-            return {"final_answer": final or "Task completed.", "branches": branches}
+            summary = HumanMessage(content=f"[Strategy: {plan_name}] Result:\n{final or 'Task completed.'}")
+            return {"final_answer": final or "Task completed.", "branches": branches, "messages": state["messages"] + [summary]}
         except Exception as e:
             err = str(e)[:300]
             if 0 <= idx < len(branches):
                 branches[idx]["status"] = "failed"
             await _log("tot_backtrack", plan_name)
             await _log("tot_progress", f"Strategy failed: {plan_name}")
-            return {"errors": state.get("errors", []) + [err], "branches": branches}
+            summary = HumanMessage(content=f"[Strategy: {plan_name}] Failed with error: {err}")
+            return {"errors": state.get("errors", []) + [err], "branches": branches, "messages": state["messages"] + [summary]}
 
     async def feedback(state: ToTState) -> dict:
         final_answer = state.get("final_answer", "")
