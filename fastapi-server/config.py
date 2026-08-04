@@ -10,136 +10,131 @@ MODEL_REGISTRY = {
         "provider": "deepseek",
         "label": "DeepSeek V4 Flash"
     },
-    "deepseek-v4": {
-        "model_id": "deepseek-v4",
+    "deepseek-v4-pro": {
+        "model_id": "deepseek-v4-pro",
         "provider": "deepseek",
-        "label": "DeepSeek V4"
-    },
-    "deepseek-r1": {
-        "model_id": "deepseek-r1",
-        "provider": "deepseek",
-        "label": "DeepSeek R1"
-    },
-    "deepseek-chat": {
-        "model_id": "deepseek-chat",
-        "provider": "deepseek",
-        "label": "DeepSeek Chat"
-    },
-    "deepseek-coder": {
-        "model_id": "deepseek-coder",
-        "provider": "deepseek",
-        "label": "DeepSeek Coder"
+        "label": "DeepSeek V4 Pro"
     },
 
     # ── Google Gemini ─────────────────────────────
-    "gemini-2.5-flash": {
-        "model_id": "gemini-2.5-flash",
+    "gemini-3.6-flash": {
+        "model_id": "gemini-3.6-flash",
         "provider": "google",
-        "label": "Gemini 2.5 Flash"
+        "label": "Gemini 3.6 Flash"
     },
-    "gemini-2.5-pro": {
-        "model_id": "gemini-2.5-pro",
+    "gemini-3.5-flash": {
+        "model_id": "gemini-3.5-flash",
         "provider": "google",
-        "label": "Gemini 2.5 Pro"
+        "label": "Gemini 3.5 Flash"
     },
-    "gemini-2.0-flash": {
-        "model_id": "gemini-2.0-flash",
+    "gemini-3.5-flash-lite": {
+        "model_id": "gemini-3.5-flash-lite",
         "provider": "google",
-        "label": "Gemini 2.0 Flash"
+        "label": "Gemini 3.5 Flash Lite"
     },
-    "gemini-2.0-flash-lite": {
-        "model_id": "gemini-2.0-flash-lite",
+    "gemini-3.1-pro-preview": {
+        "model_id": "gemini-3.1-pro-preview",
         "provider": "google",
-        "label": "Gemini 2.0 Flash Lite"
+        "label": "Gemini 3.1 Pro"
     },
-    "gemini-1.5-pro": {
-        "model_id": "gemini-1.5-pro",
+    "gemini-3.1-flash-lite": {
+        "model_id": "gemini-3.1-flash-lite",
         "provider": "google",
-        "label": "Gemini 1.5 Pro"
+        "label": "Gemini 3.1 Flash Lite"
     },
-    "gemini-1.5-flash": {
-        "model_id": "gemini-1.5-flash",
+    "gemini-3-flash-preview": {
+        "model_id": "gemini-3-flash-preview",
         "provider": "google",
-        "label": "Gemini 1.5 Flash"
+        "label": "Gemini 3 Flash (Preview)"
     },
 
     # ── Anthropic Claude ──────────────────────────
-    "claude-sonnet-4-20250514": {
-        "model_id": "claude-sonnet-4-20250514",
+    "claude-sonnet-5": {
+        "model_id": "claude-sonnet-5",
         "provider": "anthropic",
-        "label": "Claude Sonnet 4"
+        "label": "Claude Sonnet 5"
     },
-    "claude-opus-4-20250514": {
-        "model_id": "claude-opus-4-20250514",
+    "claude-opus-5": {
+        "model_id": "claude-opus-5",
         "provider": "anthropic",
-        "label": "Claude Opus 4"
+        "label": "Claude Opus 5"
     },
-    "claude-3-5-sonnet-20241022": {
-        "model_id": "claude-3-5-sonnet-20241022",
+    "claude-opus-4-8": {
+        "model_id": "claude-opus-4-8",
         "provider": "anthropic",
-        "label": "Claude 3.5 Sonnet"
+        "label": "Claude Opus 4.8"
     },
-    "claude-3-5-haiku-20241022": {
-        "model_id": "claude-3-5-haiku-20241022",
+    "claude-opus-4-7": {
+        "model_id": "claude-opus-4-7",
         "provider": "anthropic",
-        "label": "Claude 3.5 Haiku"
+        "label": "Claude Opus 4.7"
     },
-    "claude-3-haiku-20240307": {
-        "model_id": "claude-3-haiku-20240307",
+    "claude-opus-4-6": {
+        "model_id": "claude-opus-4-6",
         "provider": "anthropic",
-        "label": "Claude 3 Haiku"
+        "label": "Claude Opus 4.6"
+    },
+    "claude-sonnet-4-6": {
+        "model_id": "claude-sonnet-4-6",
+        "provider": "anthropic",
+        "label": "Claude Sonnet 4.6"
+    },
+    "claude-haiku-4-5": {
+        "model_id": "claude-haiku-4-5",
+        "provider": "anthropic",
+        "label": "Claude Haiku 4.5"
+    },
+    "claude-sonnet-4-5": {
+        "model_id": "claude-sonnet-4-5",
+        "provider": "anthropic",
+        "label": "Claude Sonnet 4.5"
+    },
+    "claude-opus-4-5": {
+        "model_id": "claude-opus-4-5",
+        "provider": "anthropic",
+        "label": "Claude Opus 4.5"
     },
 
     # ── OpenAI ────────────────────────────────────
-    "gpt-4o": {
-        "model_id": "gpt-4o",
+    "gpt-5.6-sol": {
+        "model_id": "gpt-5.6-sol",
         "provider": "openai",
-        "label": "GPT-4o"
+        "label": "GPT-5.6 Sol"
     },
-    "gpt-4o-mini": {
-        "model_id": "gpt-4o-mini",
+    "gpt-5.6-terra": {
+        "model_id": "gpt-5.6-terra",
         "provider": "openai",
-        "label": "GPT-4o Mini"
+        "label": "GPT-5.6 Terra"
     },
-    "gpt-4-turbo": {
-        "model_id": "gpt-4-turbo",
+    "gpt-5.6-luna": {
+        "model_id": "gpt-5.6-luna",
         "provider": "openai",
-        "label": "GPT-4 Turbo"
+        "label": "GPT-5.6 Luna"
     },
-    "gpt-4": {
-        "model_id": "gpt-4",
+    "gpt-5.5": {
+        "model_id": "gpt-5.5",
         "provider": "openai",
-        "label": "GPT-4"
+        "label": "GPT-5.5"
     },
-    "gpt-3.5-turbo": {
-        "model_id": "gpt-3.5-turbo",
+    "gpt-5.4": {
+        "model_id": "gpt-5.4",
         "provider": "openai",
-        "label": "GPT-3.5 Turbo"
+        "label": "GPT-5.4"
     },
-    "o1": {
-        "model_id": "o1",
+    "gpt-5.4-pro": {
+        "model_id": "gpt-5.4-pro",
         "provider": "openai",
-        "label": "o1"
+        "label": "GPT-5.4 Pro"
     },
-    "o1-mini": {
-        "model_id": "o1-mini",
+    "gpt-5.4-mini": {
+        "model_id": "gpt-5.4-mini",
         "provider": "openai",
-        "label": "o1 Mini"
+        "label": "GPT-5.4 Mini"
     },
-    "o3": {
-        "model_id": "o3",
+    "gpt-5.3-codex": {
+        "model_id": "gpt-5.3-codex",
         "provider": "openai",
-        "label": "o3"
-    },
-    "o3-mini": {
-        "model_id": "o3-mini",
-        "provider": "openai",
-        "label": "o3 Mini"
-    },
-    "o4-mini": {
-        "model_id": "o4-mini",
-        "provider": "openai",
-        "label": "o4 Mini"
+        "label": "GPT-5.3 Codex"
     },
 
     # ── OpenRouter (Free) ─────────────────────────
@@ -153,35 +148,45 @@ MODEL_REGISTRY = {
         "provider": "openrouter",
         "label": "Nemotron 3 Ultra (Free)"
     },
+    "nemotron-3-super-free": {
+        "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "provider": "openrouter",
+        "label": "Nemotron 3 Super (Free)"
+    },
     "nemotron-3-nano-omni-free": {
         "model_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "provider": "openrouter",
         "label": "Nemotron 3 Nano Omni (Free)"
     },
-    "llama-3.3-70b-free": {
-        "model_id": "meta-llama/llama-3.3-70b-instruct:free",
+    "gpt-oss-120b-free": {
+        "model_id": "openai/gpt-oss-120b:free",
         "provider": "openrouter",
-        "label": "Llama 3.3 70B (Free)"
+        "label": "GPT-OSS 120B (Free)"
     },
-    "qwen-2.5-72b-free": {
-        "model_id": "qwen/qwen-2.5-72b-instruct:free",
+    "gpt-oss-20b-free": {
+        "model_id": "openai/gpt-oss-20b:free",
         "provider": "openrouter",
-        "label": "Qwen 2.5 72B (Free)"
+        "label": "GPT-OSS 20B (Free)"
     },
-    "deepseek-r1-free": {
-        "model_id": "deepseek/deepseek-r1:free",
+    "gemma-4-26b-free": {
+        "model_id": "google/gemma-4-26b-a4b-it:free",
         "provider": "openrouter",
-        "label": "DeepSeek R1 (Free)"
+        "label": "Gemma 4 26B (Free)"
     },
-    "phi-4-reasoning-free": {
-        "model_id": "microsoft/phi-4-reasoning:free",
+    "gemma-4-31b-free": {
+        "model_id": "google/gemma-4-31b-it:free",
         "provider": "openrouter",
-        "label": "Phi-4 Reasoning (Free)"
+        "label": "Gemma 4 31B (Free)"
     },
-    "gemma-3-27b-free": {
-        "model_id": "google/gemma-3-27b-it:free",
+    "laguna-m-1-free": {
+        "model_id": "poolside/laguna-m.1:free",
         "provider": "openrouter",
-        "label": "Gemma 3 27B (Free)"
+        "label": "Laguna M.1 (Free)"
+    },
+    "ling-3-flash-free": {
+        "model_id": "inclusionai/ling-3.0-flash:free",
+        "provider": "openrouter",
+        "label": "Ling 3.0 Flash (Free)"
     },
 
     # ── OpenRouter (Paid) ─────────────────────────
@@ -190,20 +195,20 @@ MODEL_REGISTRY = {
         "provider": "openrouter",
         "label": "OpenRouter Auto"
     },
-    "claude-3.5-sonnet-or": {
-        "model_id": "anthropic/claude-3.5-sonnet",
+    "claude-sonnet-5-or": {
+        "model_id": "anthropic/claude-sonnet-5",
         "provider": "openrouter",
-        "label": "Claude 3.5 Sonnet (OR)"
+        "label": "Claude Sonnet 5 (OR)"
     },
-    "gpt-4o-or": {
-        "model_id": "openai/gpt-4o",
+    "gpt-5.6-sol-or": {
+        "model_id": "openai/gpt-5.6-sol",
         "provider": "openrouter",
-        "label": "GPT-4o (OR)"
+        "label": "GPT-5.6 Sol (OR)"
     },
-    "gemini-2.5-flash-or": {
-        "model_id": "google/gemini-2.5-flash",
+    "gemini-3.6-flash-or": {
+        "model_id": "google/gemini-3.6-flash",
         "provider": "openrouter",
-        "label": "Gemini 2.5 Flash (OR)"
+        "label": "Gemini 3.6 Flash (OR)"
     },
 }
 
