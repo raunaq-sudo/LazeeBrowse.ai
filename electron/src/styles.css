@@ -400,9 +400,9 @@ html, body {
 .copy-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 .copy-btn.copied { color: var(--success); border-color: var(--success); }
 
-/* CONNECT OVERLAY */
+/* CONNECT OVERLAY — starts below the titlebar so browser nav controls stay clickable */
 .connect-overlay {
-  position: fixed; inset: 0; z-index: 200;
+  position: fixed; top: var(--titlebar-h); left: 0; right: 0; bottom: 0; z-index: 200;
   display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);
 }
