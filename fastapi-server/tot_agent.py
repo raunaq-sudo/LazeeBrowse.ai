@@ -5,7 +5,9 @@ and replans from learnings when all branches fall short.
 """
 import json
 import os
+import re
 import uuid
+import datetime
 from typing import TypedDict, List, Optional, Callable, Awaitable
 
 from langgraph.graph import StateGraph, END
@@ -45,7 +47,9 @@ class ToTState(TypedDict):
     feedback_score: int
     replan_count: int
     datapoints_found: bool
-    data_verification: str
+    verified_datapoints: str
+    inconsistencies_found: bool
+    saved_final_path: str
     user_action: str  # "retry" | "recreate" | "context" | "stop"
 
 
@@ -80,7 +84,8 @@ def create_tot_agent(llm, tools: List[BaseTool], session_project_dir: str = "", 
     1. Generate multiple strategies
     2. Evaluate & score each
     3. Select best pending strategy, execute via deep agent
-    4. Check if result references data points → verify via a second deep agent
+    4. Check if result references data points → verify via a second deep agent; if
+       inconsistencies are found, merge the verified data back into a coherent response
     5. Feedback: score result quality 1-10
     6. If score > 7 → accept. Else backtrack or replan.
     7. Replan: generate fresh strategies from failed learnings (max 1 replan cycle).
@@ -102,21 +107,35 @@ def create_tot_agent(llm, tools: List[BaseTool], session_project_dir: str = "", 
             if not state_snapshot.next:
                 break
             task = state_snapshot.tasks[0]
-            hitl_request = task.interrupts[0].value if task.interrupts else None
-            if not hitl_request:
+            if not task.interrupts:
                 break
-            action_requests = hitl_request.get("action_requests", [])
-            if not action_requests:
+            # langchain's HumanInTheLoopMiddleware aggregates all interrupt tools of
+            # a message into one interrupt; the resume payload must carry exactly one
+            # decision per action_request.
+            resume_map = {}
+            for it in task.interrupts:
+                hitl_request = it.value
+                action_requests = hitl_request.get("action_requests", [])
+                if not action_requests:
+                    continue
+                decisions = []
+                for action in action_requests:
+                    tool_name = action.get("name", "unknown")
+                    tool_args = action.get("args", {})
+                    await _log("tot_phase", f"Awaiting user decision for {tool_name}...")
+                    if resolve_hitl is None:
+                        decision = {"type": "respond", "message": "Proceed with the default action."}
+                    else:
+                        decision = await resolve_hitl(tool_name, tool_args, action.get("description", ""))
+                    decisions.append(decision)
+                resume_map[it.id] = {"decisions": decisions}
+            if not resume_map:
                 break
-            action = action_requests[0]
-            tool_name = action.get("name", "unknown")
-            tool_args = action.get("args", {})
-            await _log("tot_phase", f"Awaiting user decision for {tool_name}...")
-            if resolve_hitl is None:
-                decision = {"type": "respond", "message": "Proceed with the default action."}
+            if len(resume_map) == 1 and len(next(iter(resume_map.values()))["decisions"]) == 1:
+                resume_value = next(iter(resume_map.values()))
             else:
-                decision = await resolve_hitl(tool_name, tool_args, action.get("description", ""))
-            result = await agent.ainvoke(Command(resume={"decisions": [decision]}), config=config)
+                resume_value = resume_map
+            result = await agent.ainvoke(Command(resume=resume_value), config=config)
         return result
 
     async def generate_plans(state: ToTState) -> dict:
@@ -298,10 +317,10 @@ After completing all steps, provide a comprehensive final answer summarizing wha
         await _log("tot_phase", "Checking if response references data points...")
         prompt = f"""Determine whether the following agent response references specific data points: numbers, statistics, figures, values, facts, or derived data that came from the task and should be verified for accuracy.
 
-Response:
-{final_answer[:2000]}
+            Response:
+            {final_answer[:2000]}
 
-Reply with ONLY JSON: {{"has_datapoints": true}} if the response contains any concrete data/figures that warrant verification, otherwise {{"has_datapoints": false}}."""
+            Reply with ONLY JSON: {{"has_datapoints": true}} if the response contains any concrete data/figures that warrant verification, otherwise {{"has_datapoints": false}}."""
         msg = HumanMessage(content=prompt)
         try:
             response = await llm.ainvoke([msg])
@@ -318,13 +337,17 @@ Reply with ONLY JSON: {{"has_datapoints": true}} if the response contains any co
         await _log("tot_phase", "Verifying data points...")
         full_prompt = base_prompt + "\n\n" + f"""## Data Verification Task
 
-The agent produced the following result for the user's task:
+        The agent produced the following result for the user's task:
 
-{final_answer[:3000]}
+        {final_answer[:3000]}
 
-Verify every data point, number, statistic, and interpretation in this result. Cross-check the figures using the available tools (browser, files, computation) as needed. Correct any inaccuracies.
+        Verify every data point, number, statistic, and interpretation in this result. Cross-check the figures using the available tools (browser, files, computation) as needed.
 
-Output the final verified answer. Clearly note which data points were confirmed, corrected, or could not be verified."""
+        Respond with ONLY JSON:
+        {{
+          "verified_datapoints": "The verified list of data points with confirmed, corrected, or unverifiable figures",
+          "inconsistencies_found": true
+        }}"""
         history = state["messages"]
         checkpointer = MemorySaver()
         thread_id = str(uuid.uuid4())
@@ -340,16 +363,74 @@ Output the final verified answer. Clearly note which data points were confirmed,
         try:
             result = await _run_agent_with_hitl(agent, history, config)
             verified = _last_ai_text(result.get("messages", []))
-            summary = HumanMessage(content=f"[Data verification] Result:\n{verified or 'Verification completed.'}")
-            await _log("tot_progress", "Data verification complete.")
+            verified_datapoints = ""
+            inconsistencies_found = False
+            if verified:
+                try:
+                    data = json.loads(_strip_json(verified))
+                    verified_datapoints = str(data.get("verified_datapoints", "") or "")
+                    inconsistencies_found = bool(data.get("inconsistencies_found", False))
+                except Exception:
+                    verified_datapoints = verified
+                    inconsistencies_found = True
+            summary = HumanMessage(content=f"[Data verification] Inconsistencies found: {inconsistencies_found}\n{verified_datapoints or 'Verification completed.'}")
+            await _log("tot_progress", f"Data verification complete. Inconsistencies found: {inconsistencies_found}")
             return {
-                "final_answer": verified or final_answer,
-                "data_verification": verified,
+                "verified_datapoints": verified_datapoints,
+                "inconsistencies_found": inconsistencies_found,
                 "messages": state["messages"] + [summary],
             }
         except Exception as e:
             err = str(e)[:300]
             await _log("tot_progress", f"Data verification failed: {err}")
+            return {"errors": state.get("errors", []) + [err]}
+
+    async def prepare_verified_data_for_feedback(state: ToTState) -> dict:
+        final_answer = state.get("final_answer", "")
+        verified_datapoints = state.get("verified_datapoints", "")
+        await _log("tot_phase", "Merging verified data into the response...")
+        full_prompt = base_prompt + "\n\n" + f"""## Consistency Merge Task
+
+        Merge the verified data points into the original response to produce one coherent, consistent report.
+
+        ### Original response:
+        {final_answer[:4000]}
+
+        ### Verified data points:
+        {verified_datapoints[:4000]}
+
+        Rules:
+        1. Every factual claim, number, statistic, and inference in the final report must be coherent with the verified data points.
+        2. Rewrite any inference that contradicts the verified data so it agrees with them.
+        3. Remove completely any claim that cannot be reconciled with the verified data.
+        4. Maintain the overall structure, tone, and completeness of the original response.
+        5. Incorporate the verified figures where they add precision.
+
+        Output the final coherent report as plain text (no JSON)."""
+        history = state["messages"]
+        checkpointer = MemorySaver()
+        thread_id = str(uuid.uuid4())
+        agent = create_deep_agent(
+            model=llm,
+            tools=tools,
+            backend=FilesystemBackend(root_dir=os.path.join(session_project_dir, "files"), virtual_mode=True),
+            system_prompt=full_prompt,
+            interrupt_on=INTERRUPT_TOOLS,
+            checkpointer=checkpointer,
+        )
+        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 1000}
+        try:
+            result = await _run_agent_with_hitl(agent, history, config)
+            merged = _last_ai_text(result.get("messages", []))
+            summary = HumanMessage(content=f"[Consistency merge] Final coherent report:\n{merged or final_answer}")
+            await _log("tot_progress", "Verified data merged into response.")
+            return {
+                "final_answer": merged or final_answer,
+                "messages": state["messages"] + [summary],
+            }
+        except Exception as e:
+            err = str(e)[:300]
+            await _log("tot_progress", f"Consistency merge failed: {err}")
             return {"errors": state.get("errors", []) + [err]}
 
     async def feedback(state: ToTState) -> dict:
@@ -359,6 +440,33 @@ Output the final verified answer. Clearly note which data points were confirmed,
         # If execution threw an exception (no final_answer), skip scoring
         if not final_answer:
             return {"branches": branches}
+
+        # Save the final response to disk if not already saved
+        update = {}
+        saved_path = state.get("saved_final_path", "")
+        already_saved = False
+        if saved_path and os.path.isfile(saved_path):
+            try:
+                with open(saved_path, "r", encoding="utf-8") as f:
+                    already_saved = f.read() == final_answer
+            except Exception:
+                already_saved = False
+        if not already_saved:
+            drafts_dir = os.path.join(session_project_dir, "files", "drafts")
+            os.makedirs(drafts_dir, exist_ok=True)
+            safe_name = re.sub(r'[^\w\-]+', '_', state.get("selected_plan", "result")).strip('_')[:40] or "result"
+            filename = f"{safe_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.txt"
+            saved_path = os.path.join(drafts_dir, filename)
+            draft_text = (
+                f"TASK:\n{state['question']}\n\n"
+                f"PLAN: {state.get('selected_plan', '')}\n\n"
+                f"STEPS:\n{chr(10).join(f'{i+1}. {s}' for i, s in enumerate(state.get('selected_steps', [])))}\n\n"
+                f"RESULT:\n{final_answer}"
+            )
+            with open(saved_path, "w", encoding="utf-8") as f:
+                f.write(draft_text)
+            update["saved_final_path"] = saved_path
+            await _log("tot_progress", f"Final response saved: {saved_path}")
 
         await _log("tot_phase", "Evaluating result quality...")
         eval_prompt = f"""Evaluate the quality of this result for the user's task.
@@ -381,7 +489,7 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
             score = 0
         score = max(0, min(10, score))
         await _log("tot_progress", f"Result quality score: {score}/10")
-        return {"feedback_score": score, "branches": branches}
+        return {"feedback_score": score, "branches": branches, **update}
 
     def route_after_feedback(state: ToTState) -> str:
         final_answer = state.get("final_answer", "")
@@ -468,6 +576,7 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
     workflow.add_node("execute_plan", execute_plan)
     workflow.add_node("check_datapoints", check_datapoints)
     workflow.add_node("verify_data", verify_data)
+    workflow.add_node("prepare_verified_data_for_feedback", prepare_verified_data_for_feedback)
     workflow.add_node("feedback", feedback)
     workflow.add_node("ask_user_action", ask_user_action)
     workflow.add_node("replan", replan)
@@ -481,7 +590,11 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
         "verify_data": "verify_data",
         "feedback": "feedback",
     })
-    workflow.add_edge("verify_data", "feedback")
+    workflow.add_conditional_edges("verify_data", lambda state: "prepare_verified_data_for_feedback" if state.get("inconsistencies_found") else "feedback", {
+        "prepare_verified_data_for_feedback": "prepare_verified_data_for_feedback",
+        "feedback": "feedback",
+    })
+    workflow.add_edge("prepare_verified_data_for_feedback", "feedback")
     workflow.add_conditional_edges("feedback", route_after_feedback, {
         "select_plan": "select_plan",
         "replan": "replan",
