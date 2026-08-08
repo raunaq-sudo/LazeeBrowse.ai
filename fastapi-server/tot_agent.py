@@ -63,6 +63,17 @@ def _pending_branches(branches: List[PlanBranch]) -> List[int]:
     return [i for i, b in enumerate(branches) if b.get("status") == "pending"]
 
 
+def _last_ai_text(msgs: List) -> str:
+    """Return the last non-tool AIMessage text from a deep agent result."""
+    for m in reversed(msgs):
+        if isinstance(m, AIMessage) and m.content and not getattr(m, "tool_calls", None):
+            return m.content
+    for m in reversed(msgs):
+        if isinstance(m, AIMessage) and m.content:
+            return m.content
+    return ""
+
+
 def create_tot_agent(llm, tools: List[BaseTool], session_project_dir: str = "", on_event: Optional[Callable[[str, str], Awaitable[None]]] = None, resolve_hitl: Optional[Callable[[str, dict, str], Awaitable[dict]]] = None):
     """
     Tree of Thought agent with:
@@ -265,17 +276,7 @@ After completing all steps, provide a comprehensive final answer summarizing wha
         config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 1000}
         try:
             result = await _run_agent_with_hitl(agent, history, config)
-            msgs = result.get("messages", [])
-            final = ""
-            for m in reversed(msgs):
-                if isinstance(m, AIMessage) and m.content and not getattr(m, "tool_calls", None):
-                    final = m.content
-                    break
-            if not final:
-                for m in reversed(msgs):
-                    if isinstance(m, AIMessage) and m.content:
-                        final = m.content
-                        break
+            final = _last_ai_text(result.get("messages", []))
             if 0 <= idx < len(branches):
                 branches[idx]["status"] = "succeeded"
             await _log("tot_progress", f"Strategy produced result: {plan_name}")
@@ -338,17 +339,7 @@ Output the final verified answer. Clearly note which data points were confirmed,
         config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 1000}
         try:
             result = await _run_agent_with_hitl(agent, history, config)
-            msgs = result.get("messages", [])
-            verified = ""
-            for m in reversed(msgs):
-                if isinstance(m, AIMessage) and m.content and not getattr(m, "tool_calls", None):
-                    verified = m.content
-                    break
-            if not verified:
-                for m in reversed(msgs):
-                    if isinstance(m, AIMessage) and m.content:
-                        verified = m.content
-                        break
+            verified = _last_ai_text(result.get("messages", []))
             summary = HumanMessage(content=f"[Data verification] Result:\n{verified or 'Verification completed.'}")
             await _log("tot_progress", "Data verification complete.")
             return {
@@ -363,7 +354,6 @@ Output the final verified answer. Clearly note which data points were confirmed,
 
     async def feedback(state: ToTState) -> dict:
         final_answer = state.get("final_answer", "")
-        errors = state.get("errors", [])
         branches = list(state["branches"])
 
         # If execution threw an exception (no final_answer), skip scoring
@@ -403,18 +393,10 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
                 return "select_plan"
             return "replan" if state.get("replan_count", 0) < 1 else END
 
-        # Result quality check
-        if score > 7:
+        # Accept only if scored >= 7, otherwise ask the user how to proceed
+        if score >= 7:
             return END
-
-        # Below 6 — ask the user how to proceed
-        if score < 6:
-            return "ask_user_action"
-
-        # 6–7 — below the accept threshold but passable: backtrack to next strategy
-        if _pending_branches(state.get("branches", [])):
-            return "select_plan"
-        return "replan" if state.get("replan_count", 0) < 1 else END
+        return "ask_user_action"
 
     async def ask_user_action(state: ToTState) -> dict:
         await _log("tot_phase", "Result scored below 6 — asking user how to proceed...")
@@ -456,10 +438,9 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
             if context:
                 update["question"] = f"{state['question']}\n\nAdditional context from user:\n{context}"
                 await _log("tot_progress", "Additional context received — recreating strategies.")
-                action = "recreate"
             else:
                 await _log("tot_progress", "No context provided — recreating strategies as-is.")
-                action = "recreate"
+            action = "recreate"
             update["user_action"] = action
         if action == "recreate":
             update["replan_count"] = state.get("replan_count", 0) + 1
@@ -478,9 +459,6 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
     async def replan(state: ToTState) -> dict:
         await _log("tot_phase", "Replanning from failed strategies...")
         return {"replan_count": state.get("replan_count", 0) + 1}
-
-    def route_replan(state: ToTState) -> str:
-        return "evaluate_plans"
 
     # ── BUILD GRAPH ───────────────────────────────
     workflow = StateGraph(ToTState)
