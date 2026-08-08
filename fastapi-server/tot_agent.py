@@ -46,6 +46,7 @@ class ToTState(TypedDict):
     replan_count: int
     datapoints_found: bool
     data_verification: str
+    user_action: str  # "retry" | "recreate" | "context" | "stop"
 
 
 def _strip_json(content: str) -> str:
@@ -406,10 +407,73 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
         if score > 7:
             return END
 
-        # Below threshold
+        # Below 6 — ask the user how to proceed
+        if score < 6:
+            return "ask_user_action"
+
+        # 6–7 — below the accept threshold but passable: backtrack to next strategy
         if _pending_branches(state.get("branches", [])):
             return "select_plan"
         return "replan" if state.get("replan_count", 0) < 1 else END
+
+    async def ask_user_action(state: ToTState) -> dict:
+        await _log("tot_phase", "Result scored below 6 — asking user how to proceed...")
+        options = (
+            "1. Retry with an other strategy\n"
+            "2. Recreate strategy from scratch\n"
+            "3. I will provide more context\n"
+            "4. Stop execution."
+        )
+        action = "recreate"
+        if resolve_hitl is not None:
+            decision = await resolve_hitl(
+                "get_user_input_from_options",
+                {"options": options},
+                "The result scored below 6. Choose how to proceed:",
+            )
+            message = (decision.get("message") or "").strip()
+            if message.startswith("1"):
+                action = "retry"
+            elif message.startswith("2"):
+                action = "recreate"
+            elif message.startswith("3"):
+                action = "context"
+            elif message.startswith("4"):
+                action = "stop"
+        await _log("tot_progress", f"User chose: {action}")
+
+        update = {"user_action": action}
+        if action == "context":
+            await _log("tot_phase", "Waiting for additional context from user...")
+            context = ""
+            if resolve_hitl is not None:
+                ctx_decision = await resolve_hitl(
+                    "get_user_context",
+                    {},
+                    "Please provide the additional context for the task:",
+                )
+                context = (ctx_decision.get("message") or "").strip()
+            if context:
+                update["question"] = f"{state['question']}\n\nAdditional context from user:\n{context}"
+                await _log("tot_progress", "Additional context received — recreating strategies.")
+                action = "recreate"
+            else:
+                await _log("tot_progress", "No context provided — recreating strategies as-is.")
+                action = "recreate"
+            update["user_action"] = action
+        if action == "recreate":
+            update["replan_count"] = state.get("replan_count", 0) + 1
+        return update
+
+    def route_after_user_action(state: ToTState) -> str:
+        action = state.get("user_action", "")
+        if action == "stop":
+            return END
+        if action == "retry":
+            if _pending_branches(state.get("branches", [])):
+                return "select_plan"
+            return "replan" if state.get("replan_count", 0) < 1 else END
+        return "replan"
 
     async def replan(state: ToTState) -> dict:
         await _log("tot_phase", "Replanning from failed strategies...")
@@ -427,6 +491,7 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
     workflow.add_node("check_datapoints", check_datapoints)
     workflow.add_node("verify_data", verify_data)
     workflow.add_node("feedback", feedback)
+    workflow.add_node("ask_user_action", ask_user_action)
     workflow.add_node("replan", replan)
 
     workflow.set_entry_point("generate_plans")
@@ -440,6 +505,12 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
     })
     workflow.add_edge("verify_data", "feedback")
     workflow.add_conditional_edges("feedback", route_after_feedback, {
+        "select_plan": "select_plan",
+        "replan": "replan",
+        "ask_user_action": "ask_user_action",
+        END: END,
+    })
+    workflow.add_conditional_edges("ask_user_action", route_after_user_action, {
         "select_plan": "select_plan",
         "replan": "replan",
         END: END,
