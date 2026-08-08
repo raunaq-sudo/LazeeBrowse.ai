@@ -517,6 +517,36 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         async def browser_command_wrapper(command: str, params: dict) -> any:
             return await send_browser_command(command, params, safe_ws)
 
+        async def resolve_hitl(tool_name: str, tool_args: dict, description: str) -> dict:
+            """Send a user_input_request to the frontend and return the user's decision."""
+            if safe_ws.is_closed:
+                return {"type": "reject", "message": "User disconnected"}
+            await safe_ws.send({"type": "processing_request_completed"})
+            await safe_ws.send({
+                "type": "user_input_request",
+                "tool": tool_name,
+                "args": tool_args,
+                "description": description,
+            })
+            user_future = asyncio.Future()
+            user_input_futures[session_id] = user_future
+            try:
+                user_data = await asyncio.wait_for(user_future, timeout=300.0)
+            except asyncio.TimeoutError:
+                user_data = {"type": "reject", "message": "User did not respond in time"}
+            finally:
+                user_input_futures.pop(session_id, None)
+
+            decision_type = user_data.get("type", "respond")
+            decision_message = user_data.get("content", "")
+            if decision_type == "respond":
+                return {"type": "respond", "message": decision_message}
+            if decision_type == "edit":
+                return {"type": "edit", "edited_action": {"name": tool_name, "args": user_data.get("edited_args", tool_args)}}
+            if decision_type == "reject":
+                return {"type": "reject", "message": decision_message}
+            return {"type": "respond", "message": decision_message}
+
         async def file_tree_wrapper():
             pass  # No file tree in browser mode
 
@@ -556,7 +586,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 elif typ == "tot_done":
                     await safe_ws.send({"type": "thinking_token", "content": "[ToT complete — synthesizing answer]"})
 
-            tot_agent = create_tot_agent(llm, tools, session_project_dir=session_project_dir, on_event=tot_event)
+            tot_agent = create_tot_agent(llm, tools, session_project_dir=session_project_dir, on_event=tot_event, resolve_hitl=resolve_hitl)
             tot_state = {
                 "messages": chat_manager.get_chat_history(session_id),
                 "question": user_message,
@@ -631,40 +661,11 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 tool_name = action.get("name", "unknown")
                 tool_args = action.get("args", {})
 
-                # Send interrupt info to frontend
-                await safe_ws.send({"type": "processing_request_completed"})
-                await safe_ws.send({
-                    "type": "user_input_request",
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "description": action.get("description", ""),
-                })
-
-                # Wait for user response
-                user_future = asyncio.Future()
-                user_input_futures[session_id] = user_future
-                try:
-                    user_data = await asyncio.wait_for(user_future, timeout=300.0)
-                except asyncio.TimeoutError:
-                    user_data = {"type": "reject", "message": "User did not respond in time"}
-                finally:
-                    user_input_futures.pop(session_id, None)
-
-                decision_type = user_data.get("type", "respond")
-                decision_message = user_data.get("content", "")
-
-                if decision_type == "respond":
-                    decisions = [{"type": "respond", "message": decision_message}]
-                elif decision_type == "edit":
-                    decisions = [{
-                        "type": "edit",
-                        "edited_action": {"name": tool_name, "args": user_data.get("edited_args", tool_args)},
-                    }]
-                else:
-                    decisions = [{"type": decision_type, "message": decision_message}] if decision_type == "reject" else [{"type": "respond", "message": decision_message}]
+                # Ask the user for a decision (shared with ToT deep agents)
+                decision = await resolve_hitl(tool_name, tool_args, action.get("description", ""))
 
                 await safe_ws.send({"type": "agent_thinking", "timestamp": datetime.now().isoformat()})
-                response = await agent.ainvoke(Command(resume={"decisions": decisions}), config=config)
+                response = await agent.ainvoke(Command(resume={"decisions": [decision]}), config=config)
 
         except Exception as e:
             await log_wrapper(f"Agent error: {str(e)[:200]}")
