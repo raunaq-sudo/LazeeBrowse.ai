@@ -300,6 +300,7 @@ After completing all steps, provide a comprehensive final answer summarizing wha
                 branches[idx]["status"] = "succeeded"
             await _log("tot_progress", f"Strategy produced result: {plan_name}")
             summary = HumanMessage(content=f"[Strategy: {plan_name}] Result:\n{final or 'Task completed.'}")
+            await _log("tot_message", summary.content)
             return {"final_answer": final or "Task completed.", "branches": branches, "messages": state["messages"] + [summary]}
         except Exception as e:
             err = str(e)[:300]
@@ -308,6 +309,7 @@ After completing all steps, provide a comprehensive final answer summarizing wha
             await _log("tot_backtrack", plan_name)
             await _log("tot_progress", f"Strategy failed: {plan_name}")
             summary = HumanMessage(content=f"[Strategy: {plan_name}] Failed with error: {err}")
+            await _log("tot_message", summary.content)
             return {"errors": state.get("errors", []) + [err], "branches": branches, "messages": state["messages"] + [summary]}
 
     async def check_datapoints(state: ToTState) -> dict:
@@ -374,6 +376,7 @@ After completing all steps, provide a comprehensive final answer summarizing wha
                     verified_datapoints = verified
                     inconsistencies_found = True
             summary = HumanMessage(content=f"[Data verification] Inconsistencies found: {inconsistencies_found}\n{verified_datapoints or 'Verification completed.'}")
+            await _log("tot_message", summary.content)
             await _log("tot_progress", f"Data verification complete. Inconsistencies found: {inconsistencies_found}")
             return {
                 "verified_datapoints": verified_datapoints,
@@ -423,6 +426,7 @@ After completing all steps, provide a comprehensive final answer summarizing wha
             result = await _run_agent_with_hitl(agent, history, config)
             merged = _last_ai_text(result.get("messages", []))
             summary = HumanMessage(content=f"[Consistency merge] Final coherent report:\n{merged or final_answer}")
+            await _log("tot_message", summary.content)
             await _log("tot_progress", "Verified data merged into response.")
             return {
                 "final_answer": merged or final_answer,

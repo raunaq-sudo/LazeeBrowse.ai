@@ -1,7 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 import json
 from datetime import datetime
 import uuid
@@ -89,7 +89,6 @@ async def remove_recent_project(request: Request):
 
 # ── STATE ───────────────────────────────────────
 
-chat_manager = None
 pending_browser_commands: Dict[str, asyncio.Future] = {}
 active_connections: Dict[str, WebSocket] = {}
 connection_tasks: Dict[str, Set[asyncio.Task]] = {}
@@ -98,14 +97,20 @@ session_project_dirs: Dict[str, str] = {}  # session_id -> project_dir
 user_input_futures: Dict[str, asyncio.Future] = {}  # session_id -> Future for interrupt resume
 
 class ChatManager:
+    """
+    Owns chat history + activity log persistence for a single project directory.
+    Instances are NOT session scoped — see `get_chat_manager()` below, which keys
+    instances by project directory so every websocket session pointed at the same
+    project shares one history store (and one sqlite file on disk).
+    """
     def __init__(self):
-        self.chat_histories: Dict[str, List[dict]] = {}
-        self.activity_logs: Dict[str, List[dict]] = {}
-        self.message_counters: Dict[str, int] = {}
-        self.db_paths: Dict[str, str] = {}
+        self.chat_histories: List[dict] = []
+        self.activity_logs: List[dict] = []
+        self.message_count = 0
+        self.db_path: str | None = None
 
-    def _get_db_path(self, session_id: str) -> str | None:
-        return self.db_paths.get(session_id)
+    def _get_db_path(self) -> str | None:
+        return self.db_path
 
     def _ensure_tables(self, db_path: str):
         import sqlite3
@@ -129,17 +134,48 @@ class ChatManager:
             );
         """)
         conn.commit()
+        # Migrate legacy DBs (created without these columns) so they stay
+        # readable and writable in place. ALTER ADD COLUMN only accepts
+        # constant defaults, so add columns without one and backfill timestamps.
+        for table in ("messages", "activity_log"):
+            try:
+                cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            except Exception:
+                continue
+            try:
+                if "created_at" not in cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT")
+                    conn.execute(f"UPDATE {table} SET created_at = datetime('now') WHERE created_at IS NULL")
+                    conn.commit()
+            except Exception:
+                pass
+        try:
+            cols = [row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()]
+            if "tool_calls" not in cols:
+                conn.execute("ALTER TABLE messages ADD COLUMN tool_calls TEXT")
+                conn.commit()
+        except Exception:
+            pass
         conn.close()
 
-    def init_session(self, session_id: str, project_dir: str):
+    def _resolve_db_path(self, project_dir: str) -> str:
+        """Prefer an existing chat DB (either filename), else create chat_session.db."""
+        plural = os.path.join(project_dir, "chat_sessions.db")
+        singular = os.path.join(project_dir, "chat_session.db")
+        if os.path.isfile(plural):
+            return plural
+        return singular
+
+    def init_session(self, project_dir: str):
+        """Load (or create) the sqlite DB for this project directory."""
         if not project_dir:
             return
-        db_path = os.path.join(project_dir, "chat_session.db")
-        self.db_paths[session_id] = db_path
+        db_path = self._resolve_db_path(project_dir)
+        self.db_path = db_path
         self._ensure_tables(db_path)
-        self.chat_histories[session_id] = self._load_history(db_path)
-        self.activity_logs[session_id] = self._load_activity_log(db_path)
-        self.message_counters[session_id] = 0
+        self.chat_histories = self._load_history(db_path)
+        self.activity_logs = self._load_activity_log(db_path)
+        self.message_count = 0
 
     def _load_history(self, db_path: str) -> List[dict]:
         import sqlite3, json
@@ -156,6 +192,9 @@ class ChatManager:
                     except json.JSONDecodeError:
                         pass
                 messages.append(msg)
+            print(f"[DB LOAD] loaded {len(messages)} chat messages from {db_path}")
+            for i, m in enumerate(messages):
+                print(f"[DB LOAD]   [{i}] role={m['role']!r} content={m['content'][:80]!r}")
             return messages
         except Exception:
             return []
@@ -173,53 +212,53 @@ class ChatManager:
         except Exception:
             return []
 
-    def _flush(self, session_id: str):
-        db_path = self._get_db_path(session_id)
+    def _flush(self):
+        db_path = self._get_db_path()
         if not db_path:
             return
         import sqlite3, json
         try:
             conn = sqlite3.connect(db_path)
             # Flush messages
-            history = self.chat_histories.get(session_id, [])
+            history = self.chat_histories
             existing = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
             if len(history) > existing:
                 for msg in history[existing:]:
                     conn.execute(
-                        "INSERT INTO messages (role, content, tool_calls) VALUES (?, ?, ?)",
+                        "INSERT INTO messages (role, content, tool_calls, created_at) VALUES (?, ?, ?, datetime('now'))",
                         (msg["role"], msg.get("content"), json.dumps(msg.get("tool_calls")) if msg.get("tool_calls") else None)
                     )
             # Flush activity logs
-            logs = self.activity_logs.get(session_id, [])
+            logs = self.activity_logs
             existing_logs = conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
             if len(logs) > existing_logs:
                 for entry in logs[existing_logs:]:
                     conn.execute(
-                        "INSERT INTO activity_log (type, content, name, input_text) VALUES (?, ?, ?, ?)",
+                        "INSERT INTO activity_log (type, content, name, input_text, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
                         (entry.get("type", "log"), entry.get("content"), entry.get("name"), entry.get("input_text"))
                     )
             conn.commit()
             conn.close()
-            self.message_counters[session_id] = 0
+            self.message_count = 0
         except Exception as e:
-            print(f"[FLUSH ERROR] {session_id}: {e}")
+            print(f"[FLUSH ERROR]: {e}")
 
-    def get_chat_history(self, session_id: str) -> List[dict]:
-        return self.chat_histories.setdefault(session_id, [])
+    def get_chat_history(self) -> List[dict]:
+        return self.chat_histories
 
-    def update_chat_history(self, message: dict, session_id: str):
-        self.chat_histories.setdefault(session_id, []).append(message)
-        self.message_counters[session_id] = self.message_counters.get(session_id, 0) + 1
-        if self.message_counters[session_id] >= 20:
-            self._flush(session_id)
+    def update_chat_history(self, message: dict):
+        self.chat_histories.append(message)
+        self.message_count += 1
+        if self.message_count >= 20:
+            self._flush()
 
-    def add_activity_log(self, session_id: str, entry: dict):
-        self.activity_logs.setdefault(session_id, []).append(entry)
+    def add_activity_log(self, entry: dict):
+        self.activity_logs.append(entry)
 
-    def clear_history(self, session_id: str):
-        self.chat_histories[session_id] = []
-        self.activity_logs[session_id] = []
-        db_path = self._get_db_path(session_id)
+    def clear_history(self):
+        self.chat_histories = []
+        self.activity_logs = []
+        db_path = self._get_db_path()
         if db_path:
             import sqlite3
             try:
@@ -230,12 +269,33 @@ class ChatManager:
                 conn.close()
             except Exception:
                 pass
-        self.message_counters[session_id] = 0
+        self.message_count = 0
 
-    def flush(self, session_id: str):
-        self._flush(session_id)
+    def flush(self):
+        self._flush()
 
-chat_manager = ChatManager()
+
+# ── CHAT MANAGER REGISTRY (project-dir scoped, NOT session scoped) ─────
+
+chat_managers: Dict[str, ChatManager] = {}
+
+def get_chat_manager(proj_dir: Optional[str]) -> Optional[ChatManager]:
+    """
+    Return the ChatManager for a project directory, loading its sqlite DB if it
+    already exists on disk or creating a fresh one if it doesn't. Instances are
+    cached by normalized project path so every session/connection pointed at the
+    same project directory shares one in-memory history + one DB file, rather than
+    each websocket session keeping its own isolated (and conflicting) history.
+    """
+    if not proj_dir:
+        return None
+    key = os.path.normpath(os.path.abspath(proj_dir))
+    mgr = chat_managers.get(key)
+    if mgr is None:
+        mgr = ChatManager()
+        mgr.init_session(proj_dir)
+        chat_managers[key] = mgr
+    return mgr
 
 # ── WEBSOCKET HELPERS ───────────────────────────
 
@@ -299,10 +359,11 @@ async def send_browser_command(command: str, params: dict, safe_ws: SafeWebSocke
     finally:
         pending_browser_commands.pop(request_id, None)
 
-async def log_chat(message: str, safe_ws: SafeWebSocket):
+async def log_chat(message: str, safe_ws: SafeWebSocket, mgr: Optional[ChatManager] = None):
     timestamp = datetime.now().isoformat()
     await safe_ws.send({"type": "log", "content": message, "timestamp": timestamp})
-    chat_manager.add_activity_log(safe_ws.session_id, {"type": "log", "content": message, "created_at": timestamp})
+    if mgr:
+        mgr.add_activity_log({"type": "log", "content": message, "created_at": timestamp})
 
 # ── FILE HELPERS ────────────────────────────────
 
@@ -457,8 +518,9 @@ def clean_up_response(response):
 from langchain_core.callbacks import BaseCallbackHandler
 
 class StreamingCallbackHandler(BaseCallbackHandler):
-    def __init__(self, safe_ws):
+    def __init__(self, safe_ws, mgr: Optional[ChatManager] = None):
         self.safe_ws = safe_ws
+        self.mgr = mgr
 
     async def on_llm_new_token(self, token: str, **kwargs):
         if token.strip():
@@ -467,10 +529,11 @@ class StreamingCallbackHandler(BaseCallbackHandler):
     async def on_tool_start(self, serialized: dict, input_str: str, **kwargs):
         name = serialized.get("name", "unknown")
         await self.safe_ws.send({"type": "tool_call", "name": name, "input": input_str[:200]})
-        chat_manager.add_activity_log(self.safe_ws.session_id, {
-            "type": "tool_call", "name": name, "input_text": input_str[:200],
-            "created_at": datetime.now().isoformat()
-        })
+        if self.mgr:
+            self.mgr.add_activity_log({
+                "type": "tool_call", "name": name, "input_text": input_str[:200],
+                "created_at": datetime.now().isoformat()
+            })
 
     async def on_tool_end(self, output: str, **kwargs):
         pass
@@ -483,6 +546,13 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         session_project_dir = session_project_dirs.get(session_id, project_dir)
         if not session_project_dir:
             await safe_ws.send({"type": "error", "content": "No project directory set. Please set a project folder before sending tasks.", "timestamp": datetime.now().isoformat()})
+            return
+
+        # Chat storage is keyed by project directory, not by session — this looks
+        # up (or lazily creates) the shared ChatManager for this project.
+        mgr = get_chat_manager(session_project_dir)
+        if mgr is None:
+            await safe_ws.send({"type": "error", "content": "Could not initialize chat history for this project directory.", "timestamp": datetime.now().isoformat()})
             return
 
         if attached_files:
@@ -507,12 +577,12 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 user_message = user_message + "\n\n--- ATTACHED FILES ---\n" + "\n".join(file_sections) + "\n--- END ATTACHED FILES ---"
 
         user_message_obj = {"role": "user", "content": user_message}
-        chat_manager.update_chat_history(user_message_obj, session_id)
+        mgr.update_chat_history(user_message_obj)
 
         await safe_ws.send({"type": "agent_thinking", "timestamp": datetime.now().isoformat()})
 
         async def log_wrapper(message: str):
-            await log_chat(message, safe_ws)
+            await log_chat(message, safe_ws, mgr)
 
         async def browser_command_wrapper(command: str, params: dict) -> any:
             return await send_browser_command(command, params, safe_ws)
@@ -566,29 +636,56 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             async def tot_event(typ: str, data: str):
                 if safe_ws.is_closed:
                     return
+                timestamp = datetime.now().isoformat()
                 if typ == "tot_phase":
-                    await safe_ws.send({"type": "log", "content": f"🔍 {data}", "timestamp": datetime.now().isoformat()})
+                    content = f"🔍 {data}"
+                    await safe_ws.send({"type": "log", "content": content, "timestamp": timestamp})
+                    mgr.add_activity_log({"type": "tot_phase", "content": data, "created_at": timestamp})
                 elif typ == "tot_branches":
                     names = json.loads(data)
                     lines = "\n".join(f"  • {n}" for n in names)
-                    await safe_ws.send({"type": "log", "content": f"Strategies identified:\n{lines}", "timestamp": datetime.now().isoformat()})
+                    content = f"Strategies identified:\n{lines}"
+                    await safe_ws.send({"type": "log", "content": content, "timestamp": timestamp})
+                    mgr.add_activity_log({"type": "tot_branches", "content": content, "created_at": timestamp})
                 elif typ == "tot_scores":
                     scores = json.loads(data)
                     lines = "\n".join(f"  • {k}: {v}" for k, v in scores.items())
-                    await safe_ws.send({"type": "log", "content": f"Strategy scores:\n{lines}", "timestamp": datetime.now().isoformat()})
+                    content = f"Strategy scores:\n{lines}"
+                    await safe_ws.send({"type": "log", "content": content, "timestamp": timestamp})
+                    mgr.add_activity_log({"type": "tot_scores", "content": content, "created_at": timestamp})
                 elif typ == "tot_selected":
-                    await safe_ws.send({"type": "log", "content": f"→ Selected: {data}", "timestamp": datetime.now().isoformat()})
+                    await safe_ws.send({"type": "log", "content": f"→ Selected: {data}", "timestamp": timestamp})
                     await safe_ws.send({"type": "thinking_token", "content": f"[Selected strategy: {data}]"})
+                    mgr.add_activity_log({"type": "tot_selected", "content": data, "created_at": timestamp})
                 elif typ == "tot_backtrack":
-                    await safe_ws.send({"type": "log", "content": f"↩ Backtracking from: {data}", "timestamp": datetime.now().isoformat()})
+                    await safe_ws.send({"type": "log", "content": f"↩ Backtracking from: {data}", "timestamp": timestamp})
+                    mgr.add_activity_log({"type": "tot_backtrack", "content": data, "created_at": timestamp})
                 elif typ == "tot_progress":
-                    await safe_ws.send({"type": "log", "content": data, "timestamp": datetime.now().isoformat()})
+                    await safe_ws.send({"type": "log", "content": data, "timestamp": timestamp})
+                    mgr.add_activity_log({"type": "tot_progress", "content": data, "created_at": timestamp})
+                elif typ == "tot_message":
+                    mgr.update_chat_history({"role": "assistant", "content": data, "tool_calls": []})
+                    print(f"[TOT DB] saving message: {data[:80]}")
+                    if not safe_ws.is_closed:
+                        await safe_ws.send({
+                            "type": "message",
+                            "role": "assistant",
+                            "id": str(uuid.uuid4()),
+                            "content": data,
+                            "timestamp": timestamp,
+                        })
                 elif typ == "tot_done":
                     await safe_ws.send({"type": "thinking_token", "content": "[ToT complete — synthesizing answer]"})
+                    mgr.add_activity_log({"type": "tot_done", "content": "ToT complete — synthesizing answer", "created_at": timestamp})
+
+                # Persist every ToT state update immediately (not just on the
+                # 20-message batching threshold) so a mid-run crash/restart
+                # doesn't lose the trace of what the agent tried.
+                mgr.flush()
 
             tot_agent = create_tot_agent(llm, tools, session_project_dir=session_project_dir, on_event=tot_event, resolve_hitl=resolve_hitl)
             tot_state = {
-                "messages": chat_manager.get_chat_history(session_id),
+                "messages": mgr.get_chat_history(),
                 "question": user_message,
                 "branches": [],
                 "selected_plan": "",
@@ -603,7 +700,8 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             final_text = result.get("final_answer", "No answer generated.")
             response = {"messages": [AIMessage(content=final_text)], "text": final_text, "tool_calls": []}
 
-            chat_manager.update_chat_history({"role": "assistant", "content": final_text, "tool_calls": []}, session_id)
+            mgr.update_chat_history({"role": "assistant", "content": final_text, "tool_calls": []})
+            mgr.flush()
             if not safe_ws.is_closed:
                 await safe_ws.send({
                     "type": "message",
@@ -631,10 +729,10 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
         await log_wrapper("Agent running...")
 
-        callback_handler = StreamingCallbackHandler(safe_ws)
+        callback_handler = StreamingCallbackHandler(safe_ws, mgr)
         config = {"recursion_limit": 1000, "configurable": {"thread_id": thread_id}, "callbacks": [callback_handler]}
 
-        input_messages = {"messages": chat_manager.get_chat_history(session_id)}
+        input_messages = {"messages": mgr.get_chat_history()}
         response = None
 
         try:
@@ -674,11 +772,11 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
         final_response = clean_up_response(response)
 
-        chat_manager.update_chat_history({
+        mgr.update_chat_history({
             "role": "assistant",
             "content": final_response['text'],
             "tool_calls": final_response['tool_calls']
-        }, session_id)
+        })
 
         if not safe_ws.is_closed:
             await safe_ws.send({
@@ -759,7 +857,10 @@ async def agent_session(websocket: WebSocket, session_id: str):
                         user_input_futures[session_id].set_result(data)
 
                 elif msg_type == "clear_history":
-                    chat_manager.clear_history(session_id)
+                    sess_dir = session_project_dirs.get(session_id, project_dir)
+                    mgr = get_chat_manager(sess_dir)
+                    if mgr:
+                        mgr.clear_history()
                     await safe_ws.send({"type": "system", "event": "history_cleared", "timestamp": datetime.now().isoformat()})
 
                 elif msg_type == "llmApiAuth":
@@ -780,26 +881,42 @@ async def agent_session(websocket: WebSocket, session_id: str):
                         break
 
                 elif msg_type == "folderPath":
-                    session_project_dirs[session_id] = data.get("folder_path", "").strip()
-                    print(f"[PROJECT DIR] {session_id}: {session_project_dirs[session_id]}")
-                    project_dir_path = session_project_dirs[session_id]
-                    chat_manager.init_session(session_id, project_dir_path)
-                    # Send stored activity logs to frontend
-                    stored_logs = chat_manager.activity_logs.get(session_id, [])
-                    for entry in stored_logs:
-                        etype = entry.get("type", "log")
-                        if etype == "tool_call":
+                    folder_path = data.get("folder_path", "").strip()
+                    session_project_dirs[session_id] = folder_path
+                    print(f"[PROJECT DIR] {session_id}: {folder_path}")
+
+                    # Chat history is scoped to the project directory, not the
+                    # session — this loads the existing sqlite DB for this
+                    # project if one exists, or creates a new one if it doesn't.
+                    mgr = get_chat_manager(folder_path)
+
+                    if mgr:
+                        # Replay stored chat messages so the frontend reloads
+                        # the full conversation for this project.
+                        for msg in mgr.get_chat_history():
                             await safe_ws.send({
-                                "type": "tool_call",
-                                "name": entry.get("name", "unknown"),
-                                "input": entry.get("input_text", ""),
+                                "type": "message",
+                                "role": msg.get("role", "assistant"),
+                                "id": str(uuid.uuid4()),
+                                "content": msg.get("content", ""),
+                                "timestamp": datetime.now().isoformat(),
                             })
-                        else:
-                            await safe_ws.send({
-                                "type": "log",
-                                "content": entry.get("content", ""),
-                                "timestamp": entry.get("created_at", datetime.now().isoformat()),
-                            })
+
+                        # Replay stored activity logs (tool calls, ToT progress, etc.)
+                        for entry in mgr.activity_logs:
+                            etype = entry.get("type", "log")
+                            if etype == "tool_call":
+                                await safe_ws.send({
+                                    "type": "tool_call",
+                                    "name": entry.get("name", "unknown"),
+                                    "input": entry.get("input_text", ""),
+                                })
+                            else:
+                                await safe_ws.send({
+                                    "type": "log",
+                                    "content": entry.get("content", ""),
+                                    "timestamp": entry.get("created_at", datetime.now().isoformat()),
+                                })
 
                 elif msg_type == "stop":
                     tasks = connection_tasks.get(session_id, set()).copy()
@@ -820,7 +937,10 @@ async def agent_session(websocket: WebSocket, session_id: str):
                 print(f"[ERROR] {session_id}: {e}")
 
     finally:
-        chat_manager.flush(session_id)
+        sess_dir = session_project_dirs.get(session_id)
+        mgr = get_chat_manager(sess_dir) if sess_dir else None
+        if mgr:
+            mgr.flush()
         await safe_ws.close()
         tasks = connection_tasks.pop(session_id, set())
         for task in tasks:
