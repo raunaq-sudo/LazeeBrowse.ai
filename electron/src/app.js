@@ -396,6 +396,13 @@ function handleServerMessage(data) {
       expandLogPanel();
       break;
 
+    case "tot_message":
+      // Intermediate ToT report messages: render without clearing the
+      // thinking/stop state — the run is still in progress.
+      addResponseLog(data.content);
+      expandLogPanel();
+      break;
+
     case "user_input_request":
       handleUserInputRequest(data);
       break;
@@ -926,20 +933,41 @@ function handleUserInputRequest(data) {
     noBtn.onclick = () => sendUserInputResponse("respond", "no");
     controls.appendChild(yesBtn);
     controls.appendChild(noBtn);
-  } else if (tool === "get_user_input_from_options" && args && args.options) {
-    let raw = args.options;
+  } else if (tool === "get_user_input_from_options") {
+    let raw = (args && args.options) || [];
     if (typeof raw === "string") {
-      raw = raw.split("\n").map(s => s.trim()).filter(Boolean).join(",");
-      raw = raw.split(",").map(s => s.trim()).filter(Boolean);
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = raw.split("\n").map(s => s.trim()).filter(Boolean).join(",").split(",").map(s => s.trim()).filter(Boolean);
+      }
     }
-    const options = Array.isArray(raw) ? raw : [];
-    options.forEach((opt) => {
+    const options = Array.isArray(raw) ? raw.filter(o => typeof o === "string" && o.trim()) : [];
+    if (options.length) {
+      options.forEach((opt) => {
+        const btn = document.createElement("button");
+        btn.className = "form-inline-btn option";
+        btn.textContent = opt;
+        btn.onclick = () => sendUserInputResponse("respond", opt);
+        controls.appendChild(btn);
+      });
+    } else {
+      const row = document.createElement("div");
+      row.className = "form-inline-row";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "form-inline-input";
+      input.placeholder = "Type your response...";
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") row.querySelector("button")?.click(); });
       const btn = document.createElement("button");
-      btn.className = "form-inline-btn option";
-      btn.textContent = opt;
-      btn.onclick = () => sendUserInputResponse("respond", opt);
-      controls.appendChild(btn);
-    });
+      btn.className = "form-inline-btn submit";
+      btn.textContent = "Send";
+      btn.onclick = () => sendUserInputResponse("respond", input.value);
+      row.appendChild(input);
+      row.appendChild(btn);
+      controls.appendChild(row);
+      setTimeout(() => input.focus(), 50);
+    }
   } else {
     const row = document.createElement("div");
     row.className = "form-inline-row";

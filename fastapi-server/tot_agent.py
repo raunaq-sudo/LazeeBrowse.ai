@@ -279,7 +279,26 @@ Use the original index from the list above."""
 {chr(10).join(f'{i+1}. {s}' for i, s in enumerate(state['selected_steps']))}
 
 Follow this plan step by step. Use the available tools to execute each step.
-After completing all steps, provide a comprehensive final answer summarizing what was done and the results."""
+After completing all steps, provide a comprehensive final answer summarizing what was done and the results.
+
+### Output Format — Case Study / Report (REQUIRED)
+Because this task requires analysis and/or web search, the final answer MUST always be written as a structured Case Study / Report. Use these sections:
+
+# Case Study: <short title derived from the user's task>
+## 1. Objective
+The goal of the task and the questions it answers.
+## 2. Approach / Methodology
+The strategy used, the tools/actions taken, and the sources consulted.
+## 3. Findings
+The concrete results, data points, and evidence gathered (with source URLs).
+## 4. Analysis
+Interpretation of the findings and how they answer the objective.
+## 5. Conclusion
+A clear summary of the outcome and any limitations.
+## 6. References
+Every source consulted, as URLs.
+
+Write the complete report as your final answer — do not summarize away the sections."""
         history = state["messages"]
         checkpointer = MemorySaver()
         thread_id = str(uuid.uuid4())
@@ -456,21 +475,28 @@ After completing all steps, provide a comprehensive final answer summarizing wha
             except Exception:
                 already_saved = False
         if not already_saved:
-            drafts_dir = os.path.join(session_project_dir, "files", "drafts")
-            os.makedirs(drafts_dir, exist_ok=True)
-            safe_name = re.sub(r'[^\w\-]+', '_', state.get("selected_plan", "result")).strip('_')[:40] or "result"
-            filename = f"{safe_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.txt"
-            saved_path = os.path.join(drafts_dir, filename)
-            draft_text = (
-                f"TASK:\n{state['question']}\n\n"
-                f"PLAN: {state.get('selected_plan', '')}\n\n"
-                f"STEPS:\n{chr(10).join(f'{i+1}. {s}' for i, s in enumerate(state.get('selected_steps', [])))}\n\n"
-                f"RESULT:\n{final_answer}"
+            # Save the case study/report under a folder named after the user's prompt.
+            report_dir = os.path.join(session_project_dir, "files")
+            safe_name = re.sub(r'[^\w\-]+', '_', state.get("question", "report")).strip('_')[:40] or "report"
+            report_dir = os.path.join(report_dir, safe_name)
+            os.makedirs(report_dir, exist_ok=True)
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"case_study_{timestamp}.md"
+            saved_path = os.path.join(report_dir, filename)
+            report_text = (
+                f"# Case Study: {state['question']}\n\n"
+                f"- **Task**: {state['question']}\n"
+                f"- **Plan used**: {state.get('selected_plan', '')}\n"
+                f"- **Date**: {datetime.datetime.now().isoformat(timespec='seconds')}\n\n"
+                f"## Steps\n"
+                f"{chr(10).join(f'{i+1}. {s}' for i, s in enumerate(state.get('selected_steps', [])))}\n\n"
+                f"## Report\n"
+                f"{final_answer}"
             )
             with open(saved_path, "w", encoding="utf-8") as f:
-                f.write(draft_text)
+                f.write(report_text)
             update["saved_final_path"] = saved_path
-            await _log("tot_progress", f"Final response saved: {saved_path}")
+            await _log("tot_progress", f"Case study saved: {saved_path}")
 
         await _log("tot_phase", "Evaluating result quality...")
         eval_prompt = f"""Evaluate the quality of this result for the user's task.
@@ -512,12 +538,12 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
 
     async def ask_user_action(state: ToTState) -> dict:
         await _log("tot_phase", "Result scored below 6 — asking user how to proceed...")
-        options = (
-            "1. Retry with an other strategy\n"
-            "2. Recreate strategy from scratch\n"
-            "3. I will provide more context\n"
-            "4. Stop execution."
-        )
+        options = [
+            "1. Retry with an other strategy",
+            "2. Recreate strategy from scratch",
+            "3. I will provide more context",
+            "4. Stop execution.",
+        ]
         action = "recreate"
         if resolve_hitl is not None:
             decision = await resolve_hitl(

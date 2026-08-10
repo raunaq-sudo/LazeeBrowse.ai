@@ -136,80 +136,6 @@ MODEL_REGISTRY = {
         "provider": "openai",
         "label": "GPT-5.3 Codex"
     },
-
-    # ── OpenRouter (Free) ─────────────────────────
-    "openrouter-free": {
-        "model_id": "openrouter/free",
-        "provider": "openrouter",
-        "label": "OpenRouter Free (Auto)"
-    },
-    "nemotron-3-ultra-free": {
-        "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "provider": "openrouter",
-        "label": "Nemotron 3 Ultra (Free)"
-    },
-    "nemotron-3-super-free": {
-        "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
-        "provider": "openrouter",
-        "label": "Nemotron 3 Super (Free)"
-    },
-    "nemotron-3-nano-omni-free": {
-        "model_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-        "provider": "openrouter",
-        "label": "Nemotron 3 Nano Omni (Free)"
-    },
-    "gpt-oss-120b-free": {
-        "model_id": "openai/gpt-oss-120b:free",
-        "provider": "openrouter",
-        "label": "GPT-OSS 120B (Free)"
-    },
-    "gpt-oss-20b-free": {
-        "model_id": "openai/gpt-oss-20b:free",
-        "provider": "openrouter",
-        "label": "GPT-OSS 20B (Free)"
-    },
-    "gemma-4-26b-free": {
-        "model_id": "google/gemma-4-26b-a4b-it:free",
-        "provider": "openrouter",
-        "label": "Gemma 4 26B (Free)"
-    },
-    "gemma-4-31b-free": {
-        "model_id": "google/gemma-4-31b-it:free",
-        "provider": "openrouter",
-        "label": "Gemma 4 31B (Free)"
-    },
-    "laguna-m-1-free": {
-        "model_id": "poolside/laguna-m.1:free",
-        "provider": "openrouter",
-        "label": "Laguna M.1 (Free)"
-    },
-    "ling-3-flash-free": {
-        "model_id": "inclusionai/ling-3.0-flash:free",
-        "provider": "openrouter",
-        "label": "Ling 3.0 Flash (Free)"
-    },
-
-    # ── OpenRouter (Paid) ─────────────────────────
-    "openrouter-auto": {
-        "model_id": "openrouter/auto",
-        "provider": "openrouter",
-        "label": "OpenRouter Auto"
-    },
-    "claude-sonnet-5-or": {
-        "model_id": "anthropic/claude-sonnet-5",
-        "provider": "openrouter",
-        "label": "Claude Sonnet 5 (OR)"
-    },
-    "gpt-5.6-sol-or": {
-        "model_id": "openai/gpt-5.6-sol",
-        "provider": "openrouter",
-        "label": "GPT-5.6 Sol (OR)"
-    },
-    "gemini-3.6-flash-or": {
-        "model_id": "google/gemini-3.6-flash",
-        "provider": "openrouter",
-        "label": "Gemini 3.6 Flash (OR)"
-    },
 }
 
 
@@ -259,14 +185,6 @@ async def get_models(api_key, model_tag="deepseek-v4-flash", temperature=0.5):
             model=model_id,
             temperature=temperature,
             api_key=api_key,
-        )
-    elif provider == "openrouter":
-        from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(
-            model=model_id,
-            temperature=temperature,
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
         )
     else:
         raise ValueError(f"Unsupported provider: {provider}")

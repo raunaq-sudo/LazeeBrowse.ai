@@ -14,7 +14,7 @@ from deepagents.backends import FilesystemBackend
 from langgraph.types import Command
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AIMessage
-from browser_tools_electron import build_tools
+from browser_tools_electron import build_tools, extract_text_from_file
 from config import get_models, get_model_list
 from prompts.deep_agent_browser import prompt
 from tot_agent import create_tot_agent
@@ -568,8 +568,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                     full_path = None
                 if full_path and os.path.isfile(full_path):
                     try:
-                        with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
-                            content = fh.read()
+                        content = extract_text_from_file(full_path)
                         file_sections.append(f"--- FILE: {fname} ---\n{content}\n--- END FILE ---")
                     except Exception as e:
                         file_sections.append(f"--- FILE: {fname} ---\n[Error reading: {e}]\n--- END FILE ---")
@@ -668,7 +667,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                     print(f"[TOT DB] saving message: {data[:80]}")
                     if not safe_ws.is_closed:
                         await safe_ws.send({
-                            "type": "message",
+                            "type": "tot_message",
                             "role": "assistant",
                             "id": str(uuid.uuid4()),
                             "content": data,

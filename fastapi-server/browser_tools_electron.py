@@ -5,6 +5,60 @@ from typing import List, Dict, Optional
 from langchain.tools import tool
 
 
+def extract_text_from_file(full_path: str) -> str:
+    """Extract readable text from a file based on extension.
+
+    Supports PDF, DOCX, XLSX, PPTX and falls back to plain UTF-8 text for
+    everything else. On parse errors returns a short error note instead of
+    raising, so the agent can react gracefully.
+    """
+    ext = os.path.splitext(full_path)[1].lower()
+    try:
+        if ext == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(full_path)
+            return "\n".join((page.extract_text() or "") for page in reader.pages)
+        if ext == ".docx":
+            from docx import Document
+            doc = Document(full_path)
+            parts = [p.text for p in doc.paragraphs if p.text]
+            for table in doc.tables:
+                for row in table.rows:
+                    parts.append(" | ".join(c.text.strip() for c in row.cells))
+            return "\n".join(parts)
+        if ext == ".xlsx":
+            from openpyxl import load_workbook
+            wb = load_workbook(full_path, data_only=True, read_only=True)
+            parts = []
+            for ws in wb.worksheets:
+                parts.append(f"[Sheet: {ws.title}]")
+                for row in ws.iter_rows(values_only=True):
+                    vals = ["" if v is None else str(v) for v in row]
+                    if any(vals):
+                        parts.append(" | ".join(vals))
+            return "\n".join(parts)
+        if ext == ".pptx":
+            from pptx import Presentation
+            prs = Presentation(full_path)
+            parts = []
+            for i, slide in enumerate(prs.slides, 1):
+                parts.append(f"[Slide {i}]")
+                for shape in slide.shapes:
+                    if getattr(shape, "has_text_frame", False):
+                        for para in shape.text_frame.paragraphs:
+                            txt = "".join(run.text for run in para.runs)
+                            if txt.strip():
+                                parts.append(txt)
+                    if getattr(shape, "has_table", False):
+                        for row in shape.table.rows:
+                            parts.append(" | ".join(c.text.strip() for c in row.cells))
+            return "\n".join(parts)
+        with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except Exception as e:
+        return f"[Error reading {os.path.basename(full_path)}: {e}]"
+
+
 def build_tools(browser_command, log_chat, base_path=None):
     """Create LangChain tools that control Electron's BrowserView via IPC."""
 
@@ -175,9 +229,16 @@ def build_tools(browser_command, log_chat, base_path=None):
         return query
 
     @tool
-    async def get_user_input_from_options(options: str) -> str:
-        """Present numbered options to user. Format: '1. Red, 2. Green, 3. Blue'."""
-        return options
+    async def get_user_input_from_options(options: List[str]) -> str:
+        """Ask the user to choose one option from the given list. Pass options as a JSON list of strings, e.g. ["Red", "Green", "Blue"]. Returns the user's chosen option text."""
+        if isinstance(options, str):
+            try:
+                options = json.loads(options)
+            except json.JSONDecodeError:
+                return "ERROR: options must be a valid JSON list of strings."
+        if not isinstance(options, list) or not all(isinstance(o, str) for o in options):
+            return "ERROR: options must be a valid JSON list of strings."
+        return json.dumps(options)
 
     # ── FILE OPERATIONS ──────────────────────────
 
@@ -197,14 +258,13 @@ def build_tools(browser_command, log_chat, base_path=None):
 
     @tool
     async def read_file(filepath: str) -> str:
-        """Read file contents."""
+        """Read file contents. Supports PDF, DOCX, XLSX, PPTX, and plain text files."""
         await log_chat(f"Reading {filepath}")
         try:
             full_path = resolve_user_path(filepath)
             if not os.path.exists(full_path):
                 return f"Not found: {filepath}"
-            with open(full_path, "r", encoding="utf-8") as f:
-                return f.read()
+            return extract_text_from_file(full_path)
         except Exception as e:
             return str(e)
 
