@@ -13,4 +13,3 @@ beautifulsoup4>=4.15.0
 pypandoc>=1.17
 rich>=15.0.0
 pypdf>=5.0.0
-defusedxml>=0.7.1

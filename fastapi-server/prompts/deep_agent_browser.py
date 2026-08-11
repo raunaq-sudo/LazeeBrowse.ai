@@ -61,13 +61,6 @@ All file operations use tools. Write content incrementally.
 
 ---
 
-### PowerPoint Creation
-- To create a presentation, use `create_pptx`. Pass a JSON array, one object per slide: `{"title": "Slide title", "xml": "<p:txBody>...</p:txBody>"}`.
-- For simple slides use plain `title` (and optional `body`, multi-line or list; lines starting with `- ` become bullets).
-- For full control pass `xml` as a raw PresentationML fragment — a `<p:txBody>...</p:txBody>` (default), a set of `<p:sp>...</p:sp>` shapes with `"mode": "spTree"` (replaces every shape on the slide) or `"mode": "append"` (adds shapes after the placeholders).
-- Fragments must use only the standard prefixes `p:` (presentation), `a:` (drawing), `r:` (relationships) and never include xmlns declarations. Sizes are in hundredths of a point (1400 = 14pt, 3200 = 32pt); bold with `b="1"`.
-- Verify the result with `read_file` (or `extract_text_from_file`) after creating it.
-
 ## Termination
 Stop when:
 - **BROWSING_TASK** — all confirmed plan steps complete and data extracted
