@@ -528,10 +528,10 @@ class StreamingCallbackHandler(BaseCallbackHandler):
 
     async def on_tool_start(self, serialized: dict, input_str: str, **kwargs):
         name = serialized.get("name", "unknown")
-        await self.safe_ws.send({"type": "tool_call", "name": name, "input": input_str[:200]})
+        await self.safe_ws.send({"type": "tool_call", "name": name})
         if self.mgr:
             self.mgr.add_activity_log({
-                "type": "tool_call", "name": name, "input_text": input_str[:200],
+                "type": "tool_call", "name": name,
                 "created_at": datetime.now().isoformat()
             })
 
@@ -908,7 +908,6 @@ async def agent_session(websocket: WebSocket, session_id: str):
                                 await safe_ws.send({
                                     "type": "tool_call",
                                     "name": entry.get("name", "unknown"),
-                                    "input": entry.get("input_text", ""),
                                 })
                             else:
                                 await safe_ws.send({

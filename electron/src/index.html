@@ -108,6 +108,26 @@
 
     <!-- BROWSER VIEW -->
     <webview id="browserView" class="browser-view" src="https://www.google.com" autosize="on"></webview>
+
+    <!-- SAVE OVERLAY -->
+    <div class="save-overlay" id="saveOverlay">
+      <button class="save-overlay-btn" id="saveOverlayBtn" title="Save current page">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <div class="save-menu hidden" id="saveMenu">
+        <button id="savePdfBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          Save as PDF
+        </button>
+        <button id="savePptBtn" disabled title="Coming soon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Save as PPT
+          <span class="save-menu-badge">soon</span>
+        </button>
+      </div>
+    </div>
   </div>
 </div>
 

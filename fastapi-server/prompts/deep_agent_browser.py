@@ -59,6 +59,10 @@ Before acting, classify the query:
 ## File Mode
 All file operations use tools. Write content incrementally.
 
+### Reports
+- All reports must be created in **HTML format** with a **CSS stylesheet** (inline `<style>` or a linked CSS file). No JS is allowed in reports.
+- Use semantic markup (headings, tables, lists) styled with CSS; the report must render cleanly in the browser without any JavaScript.
+
 ---
 
 ## Termination

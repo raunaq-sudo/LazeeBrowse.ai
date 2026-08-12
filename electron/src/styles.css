@@ -341,6 +341,40 @@ html, body {
   border: none;
 }
 
+/* SAVE OVERLAY (floating on the browser) */
+.save-overlay {
+  position: absolute; top: 12px; right: 12px; z-index: 50;
+  display: flex; flex-direction: column; align-items: flex-end;
+}
+.save-overlay-btn {
+  width: 36px; height: 36px; border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; color: var(--text-secondary);
+  background: var(--bg-surface); box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  transition: var(--transition);
+}
+.save-overlay-btn:hover { color: var(--accent); border-color: var(--accent); }
+.save-overlay-btn:active { transform: scale(0.95); }
+.save-menu {
+  margin-top: 6px; min-width: 168px; background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+}
+.save-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 9px 12px; background: none; border: none; cursor: pointer;
+  color: var(--text-primary); font-size: 12px; text-align: left;
+  transition: var(--transition);
+}
+.save-menu button:hover:not(:disabled) { background: var(--accent-dim); color: var(--accent); }
+.save-menu button:disabled { color: var(--text-muted); cursor: not-allowed; }
+.save-menu button:disabled svg { opacity: 0.4; }
+.save-menu-badge {
+  margin-left: auto; font-size: 9px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted);
+  border: 1px solid var(--border-mid); border-radius: 3px; padding: 1px 4px;
+}
+
 /* LOG PANEL */
 .log-panel {
   position: fixed; bottom: 0; left: 0; right: 0;

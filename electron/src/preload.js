@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // File operations
   openFile: (path) => ipcRenderer.invoke("open-file", path),
+  savePdf: (data, defaultName) => ipcRenderer.invoke("save-pdf", data, defaultName),
   selectFolder: () => ipcRenderer.invoke("select-folder"),
   selectFiles: (defaultPath) => ipcRenderer.invoke("select-files", defaultPath),
   scanDirectory: (dirPath) => ipcRenderer.invoke("scan-directory", dirPath),

@@ -38,6 +38,7 @@ class PlanBranch(TypedDict):
 class ToTState(TypedDict):
     messages: List
     question: str
+    expanded_question: str
     branches: List[PlanBranch]
     selected_plan: str
     selected_steps: List[str]
@@ -47,6 +48,7 @@ class ToTState(TypedDict):
     feedback_score: int
     replan_count: int
     datapoints_found: bool
+    is_user_input_required: bool
     verified_datapoints: str
     inconsistencies_found: bool
     saved_final_path: str
@@ -138,8 +140,51 @@ def create_tot_agent(llm, tools: List[BaseTool], session_project_dir: str = "", 
             result = await agent.ainvoke(Command(resume=resume_value), config=config)
         return result
 
+    async def expand_prompt(state: ToTState) -> dict:
+        """Deep-thinking step: expand the user's prompt into a detailed,
+        self-contained task description before regenerating strategies.
+        Only runs when the user chooses "recreate from scratch". The
+        expansion is also added to the chat memory."""
+        await _log("tot_phase", "Expanding user prompt for deeper planning...")
+        history_text = ""
+        for m in state.get("messages", [])[-8:]:
+            role = getattr(m, "type", "unknown")
+            content = str(getattr(m, "content", "")).strip()[:400]
+            if content:
+                history_text += f"[{role}] {content}\n"
+        prompt = f"""You are a deep-thinking planner. Expand the user's prompt into a detailed, self-contained task description that captures the full intent before any strategy is formulated.
+
+User prompt:
+{state['question']}
+
+Relevant conversation context:
+{history_text or "(none)"}
+
+Produce an expanded prompt that:
+1. Restates the goal clearly and completely.
+2. Lists the key questions the task must answer, plus any constraints or requirements implied.
+3. Notes the relevant context, assumptions, and the expected form of the final deliverable.
+
+Respond with ONLY JSON: {{"expanded_prompt": "The expanded task description"}}"""
+        msg = HumanMessage(content=prompt)
+        try:
+            response = await llm.ainvoke([msg])
+            content = _strip_json(response.content)
+            data = json.loads(content)
+            expanded = str(data.get("expanded_prompt", "")).strip()
+        except Exception:
+            expanded = ""
+        if not expanded:
+            expanded = state["question"]
+            await _log("tot_progress", "Prompt expansion failed — falling back to the original prompt.")
+        else:
+            await _log("tot_progress", "User prompt expanded for strategy planning.")
+            await _log("tot_message", f"[Expanded prompt]\n{expanded}")
+        return {"expanded_question": expanded}
+
     async def generate_plans(state: ToTState) -> dict:
         is_replan = state.get("replan_count", 0) > 0
+        task_prompt = state.get("expanded_question") or state["question"]
         if is_replan:
             await _log("tot_phase", "Replanning based on failed strategies...")
             failed = [b for b in state["branches"] if b.get("status") == "failed"]
@@ -149,7 +194,7 @@ def create_tot_agent(llm, tools: List[BaseTool], session_project_dir: str = "", 
             )
             plan_prompt = f"""You are a strategic planner. Previous strategies failed for this task.
 
-User task: {state['question']}
+User task: {task_prompt}
 
 Failed strategies with their rationale:
 {lessons}
@@ -170,7 +215,7 @@ Format your response as valid JSON:
             await _log("tot_phase", "Generating diverse strategies...")
             plan_prompt = f"""You are a strategic planner. Given a user task, generate 2-3 distinct approaches to solve it.
 
-User task: {state['question']}
+User task: {task_prompt}
 
 For each approach, provide:
 1. A concise name/description of the approach
@@ -334,24 +379,31 @@ Write the complete report as your final answer — do not summarize away the sec
     async def check_datapoints(state: ToTState) -> dict:
         final_answer = state.get("final_answer", "")
         if not final_answer:
-            return {"datapoints_found": False}
+            return {"datapoints_found": False, "is_user_input_required": False}
         await _log("tot_phase", "Checking if response references data points...")
-        prompt = f"""Determine whether the following agent response references specific data points: numbers, statistics, figures, values, facts, or derived data that came from the task and should be verified for accuracy.
+        prompt = f"""Determine the following about the agent's response:
 
-            Response:
-            {final_answer[:2000]}
+1. Does it reference specific data points? (numbers, statistics, figures, values, facts, or derived data that came from the task and should be verified for accuracy)
+2. Does it require input from the user to proceed? (e.g. it ended with a question, asks for confirmation or a decision, or the task cannot continue without the user providing something)
 
-            Reply with ONLY JSON: {{"has_datapoints": true}} if the response contains any concrete data/figures that warrant verification, otherwise {{"has_datapoints": false}}."""
+Response:
+{final_answer[:2000]}
+
+Reply with ONLY JSON: {{"has_datapoints": true/false, "is_user_input_required": true/false}}."""
         msg = HumanMessage(content=prompt)
         try:
             response = await llm.ainvoke([msg])
             content = _strip_json(response.content)
             data = json.loads(content)
             found = bool(data.get("has_datapoints", False))
+            user_input_required = bool(data.get("is_user_input_required", False))
         except Exception:
             found = False
+            user_input_required = False
         await _log("tot_progress", f"Data points detected: {found}")
-        return {"datapoints_found": found}
+        if user_input_required:
+            await _log("tot_progress", "User input required — stopping execution.")
+        return {"datapoints_found": found, "is_user_input_required": user_input_required}
 
     async def verify_data(state: ToTState) -> dict:
         final_answer = state.get("final_answer", "")
@@ -592,6 +644,9 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
             if _pending_branches(state.get("branches", [])):
                 return "select_plan"
             return "replan" if state.get("replan_count", 0) < 1 else END
+        if action == "recreate":
+            # Only "recreate from scratch" triggers the prompt-expansion step.
+            return "expand_prompt"
         return "replan"
 
     async def replan(state: ToTState) -> dict:
@@ -600,6 +655,7 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
 
     # ── BUILD GRAPH ───────────────────────────────
     workflow = StateGraph(ToTState)
+    workflow.add_node("expand_prompt", expand_prompt)
     workflow.add_node("generate_plans", generate_plans)
     workflow.add_node("evaluate_plans", evaluate_plans)
     workflow.add_node("select_plan", select_plan)
@@ -612,13 +668,15 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
     workflow.add_node("replan", replan)
 
     workflow.set_entry_point("generate_plans")
+    workflow.add_edge("expand_prompt", "generate_plans")
     workflow.add_edge("generate_plans", "evaluate_plans")
     workflow.add_edge("evaluate_plans", "select_plan")
     workflow.add_edge("select_plan", "execute_plan")
     workflow.add_edge("execute_plan", "check_datapoints")
-    workflow.add_conditional_edges("check_datapoints", lambda state: "verify_data" if state.get("datapoints_found") else "feedback", {
+    workflow.add_conditional_edges("check_datapoints", lambda state: END if state.get("is_user_input_required") else ("verify_data" if state.get("datapoints_found") else "feedback"), {
         "verify_data": "verify_data",
         "feedback": "feedback",
+        END: END,
     })
     workflow.add_conditional_edges("verify_data", lambda state: "prepare_verified_data_for_feedback" if state.get("inconsistencies_found") else "feedback", {
         "prepare_verified_data_for_feedback": "prepare_verified_data_for_feedback",
@@ -634,6 +692,7 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
     workflow.add_conditional_edges("ask_user_action", route_after_user_action, {
         "select_plan": "select_plan",
         "replan": "replan",
+        "expand_prompt": "expand_prompt",
         END: END,
     })
     workflow.add_edge("replan", "generate_plans")

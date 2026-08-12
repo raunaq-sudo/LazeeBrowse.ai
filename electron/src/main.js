@@ -117,6 +117,21 @@ ipcMain.handle("open-file", async (event, filePath) => {
   }
 });
 
+ipcMain.handle("save-pdf", async (event, data, defaultName) => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Save page as PDF",
+      defaultPath: defaultName || "page.pdf",
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (result.canceled || !result.filePath) return { success: false, canceled: true };
+    await fs.promises.writeFile(result.filePath, Buffer.from(data));
+    return { success: true, path: result.filePath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle("select-folder", async () => {
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory", "createDirectory"],

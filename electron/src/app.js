@@ -241,6 +241,61 @@ async function webviewExecute(js) {
   }
 }
 
+// ── SAVE OVERLAY (floating on the browser) ──────
+function initSaveOverlay() {
+  const btn = document.getElementById("saveOverlayBtn");
+  const menu = document.getElementById("saveMenu");
+  if (!btn || !menu) return;
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu.classList.toggle("hidden");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (e.target !== btn && !menu.contains(e.target)) {
+      menu.classList.add("hidden");
+    }
+  });
+
+  const savePdfBtn = document.getElementById("savePdfBtn");
+  if (savePdfBtn) {
+    savePdfBtn.addEventListener("click", async () => {
+      menu.classList.add("hidden");
+      const wv = getBrowserView();
+      if (!wv) {
+        addLog("Save as PDF: browser not initialized");
+        return;
+      }
+      try {
+        const title = (wv.getTitle() || "page").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+        addLog("Rendering current page to PDF...");
+        const data = await wv.printToPDF({ printBackground: true, pageSize: "A4" });
+        const res = await window.electronAPI.savePdf(new Uint8Array(data), title + ".pdf");
+        if (res && res.success) {
+          addLog("Saved PDF: " + res.path);
+        } else if (res && res.canceled) {
+          addLog("Save canceled");
+        } else {
+          addLog("Save as PDF failed: " + ((res && res.error) || "unknown error"));
+        }
+      } catch (e) {
+        addLog("Save as PDF failed: " + e.message);
+      }
+    });
+  }
+
+  const savePptBtn = document.getElementById("savePptBtn");
+  if (savePptBtn) {
+    savePptBtn.addEventListener("click", () => {
+      menu.classList.add("hidden");
+      addLog("Save as PPT is coming soon.");
+    });
+  }
+}
+
+initSaveOverlay();
+
 // ── JS ESCAPE HELPER ─────────────────────────────
 function escapeJsString(str) {
   if (typeof str !== "string") return "";
@@ -379,7 +434,7 @@ function handleServerMessage(data) {
       break;
 
     case "tool_call":
-      addLog(`Tool: ${data.name}${data.input ? ` (${data.input})` : ""}`);
+      addLog(`Tool: ${data.name}`);
       break;
 
     case "log":
@@ -1268,7 +1323,11 @@ function renderTreeNode(parent, entry, depth) {
       e.stopPropagation();
       if (!savedProjectDir) return;
       const fullPath = savedProjectDir + "/" + entry.path;
-      window.electronAPI.openFile(fullPath);
+      if (/\.(html?|xhtml)$/i.test(entry.name)) {
+        navigateToUrl("file://" + fullPath);
+      } else {
+        window.electronAPI.openFile(fullPath);
+      }
     });
   }
 
