@@ -11,3 +11,6 @@ fastapi-server/models
 fastapi-server/dist
 fastapi-server/build
 fastapi-server/__pycache__
+
+*.db
+fastapi-server/data
