@@ -676,6 +676,12 @@ async function handleBrowserCommand(data) {
           })()
         `);
         break;
+      case "run_js":
+        result = await window.electronAPI.runJs(params.code);
+        break;
+      case "get_network_payloads":
+        result = await window.electronAPI.getNetworkLog();
+        break;
       case "submit_form":
         result = await webviewExecute(`
           (() => {

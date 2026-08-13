@@ -355,6 +355,31 @@ def build_tools(browser_command, log_chat, base_path=None):
         """Get the raw HTML of the page body."""
         return await browser_command("get_page_content", {})
 
+    @tool
+    async def run_js(code: str) -> str:
+        """Execute JavaScript in the current page and return the result as a JSON string. The code runs in the page context (via Electron webContents.executeJavaScript), so it can read/modify the DOM, call fetch, read cookies, etc. Prefer an expression that returns a JSON-serializable value."""
+        await log_chat("Running JS on page")
+        result = await browser_command("run_js", {"code": code})
+        if isinstance(result, dict) and result.get("error"):
+            return f"Error: {result['error']}"
+        if isinstance(result, dict) and result.get("ok"):
+            return str(result.get("result", ""))
+        return str(result)
+
+    @tool
+    async def get_network_payloads(url_filter: str = "", limit: int = 100) -> list:
+        """Fetch the network payloads loaded by the current site (captured via Electron webRequest). Returns a list of requests with url, method, resourceType, status, contentType, size (response bytes) and payload (request body when one was sent). Optionally filter URLs by substring and cap the number of entries returned."""
+        await log_chat("Fetching network payloads")
+        result = await browser_command("get_network_payloads", {"url_filter": url_filter, "limit": limit})
+        if isinstance(result, dict) and result.get("error"):
+            return f"Error: {result['error']}"
+        if not isinstance(result, dict) or not isinstance(result.get("entries"), list):
+            return []
+        entries = result["entries"]
+        if url_filter:
+            entries = [e for e in entries if url_filter.lower() in str(e.get("url", "")).lower()]
+        return entries[: max(1, int(limit or 100))]
+
     # ── USER INPUT ───────────────────────────────
     # These tools are interrupted by HumanInTheLoopMiddleware via interrupt_on.
     # The tool functions are essentially stubs — the user's respond value
@@ -485,6 +510,7 @@ def build_tools(browser_command, log_chat, base_path=None):
         click, type_text, scroll, submit_form, press_key, page_down, page_up,
         select_option, get_dropdown_options,
         get_page_text, get_all_links, get_search_results, get_all_headings, get_ui_schema, get_page_content,
+        run_js, get_network_payloads,
         get_user_confirmation, get_user_input_from_options,
         write_file, read_file, delete_entry,
         get_current_date_time, get_total_tokens, action_logger,

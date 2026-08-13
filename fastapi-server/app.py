@@ -108,6 +108,8 @@ class ChatManager:
         self.activity_logs: List[dict] = []
         self.message_count = 0
         self.db_path: str | None = None
+        self.memory_summary: str = ""
+        self.MEMORY_WINDOW = 10
 
     def _get_db_path(self) -> str | None:
         return self.db_path
@@ -131,6 +133,11 @@ class ChatManager:
                 name TEXT,
                 input_text TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS conversation_memory (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT DEFAULT (datetime('now'))
             );
         """)
         conn.commit()
@@ -175,6 +182,7 @@ class ChatManager:
         self._ensure_tables(db_path)
         self.chat_histories = self._load_history(db_path)
         self.activity_logs = self._load_activity_log(db_path)
+        self.memory_summary = self._load_memory_summary(db_path)
         self.message_count = 0
 
     def _load_history(self, db_path: str) -> List[dict]:
@@ -211,6 +219,67 @@ class ChatManager:
             ]
         except Exception:
             return []
+
+    def _load_memory_summary(self, db_path: str) -> str:
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT value FROM conversation_memory WHERE key = 'summary'"
+            ).fetchone()
+            conn.close()
+            return row[0] if row and row[0] else ""
+        except Exception:
+            return ""
+
+    def get_llm_messages(self) -> List[dict]:
+        """Hybrid Rolling Memory: recent messages are kept intact (window) and
+        older ones are condensed into a background summary prepended to the
+        LLM input (which rides atop the system prompt)."""
+        history = self.chat_histories[-self.MEMORY_WINDOW:]
+        if not self.memory_summary:
+            return list(history)
+        return [
+            {"role": "system", "content": f"Conversation summary (older context):\n{self.memory_summary}"},
+        ] + list(history)
+
+    def set_memory_summary(self, summary: str):
+        self.memory_summary = (summary or "").strip()
+        db_path = self._get_db_path()
+        if not db_path or not self.memory_summary:
+            return
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "INSERT INTO conversation_memory (key, value, updated_at) VALUES ('summary', ?, datetime('now')) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+                (self.memory_summary,),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[MEMORY ERROR]: {e}")
+
+    def prune_history_to_window(self, window: int = 0):
+        """Drop the oldest messages beyond the rolling window, in memory and DB."""
+        window = window or self.MEMORY_WINDOW
+        self.chat_histories = self.chat_histories[-window:]
+        db_path = self._get_db_path()
+        if not db_path:
+            return
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "DELETE FROM messages WHERE id NOT IN "
+                "(SELECT id FROM messages ORDER BY id DESC LIMIT ?)",
+                (window,),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[PRUNE ERROR]: {e}")
 
     def _flush(self):
         db_path = self._get_db_path()
@@ -258,6 +327,7 @@ class ChatManager:
     def clear_history(self):
         self.chat_histories = []
         self.activity_logs = []
+        self.memory_summary = ""
         db_path = self._get_db_path()
         if db_path:
             import sqlite3
@@ -265,6 +335,7 @@ class ChatManager:
                 conn = sqlite3.connect(db_path)
                 conn.execute("DELETE FROM messages")
                 conn.execute("DELETE FROM activity_log")
+                conn.execute("DELETE FROM conversation_memory")
                 conn.commit()
                 conn.close()
             except Exception:
@@ -364,6 +435,49 @@ async def log_chat(message: str, safe_ws: SafeWebSocket, mgr: Optional[ChatManag
     await safe_ws.send({"type": "log", "content": message, "timestamp": timestamp})
     if mgr:
         mgr.add_activity_log({"type": "log", "content": message, "created_at": timestamp})
+
+async def roll_conversation_memory(llm, mgr: Optional[ChatManager]):
+    """Hybrid Rolling Memory compaction: fold everything older than the last
+    N messages into a rolling summary, then prune the old messages from both
+    memory and the DB (the summary itself is persisted too)."""
+    if not llm or not mgr:
+        return
+    history = mgr.get_chat_history()
+    window = mgr.MEMORY_WINDOW
+    if len(history) <= window:
+        return
+    old = history[:-window]
+
+    lines = []
+    for m in old:
+        role = m.get("role", "unknown")
+        content = str(m.get("content") or "").strip()
+        if content:
+            lines.append(f"[{role}] {content[:1500]}")
+    if not lines:
+        return
+
+    prompt = (
+        "You maintain a running summary of a conversation between a user and an "
+        "AI web-browsing agent that browses sites, runs JS, and produces reports.\n\n"
+        f"Previous summary:\n{mgr.memory_summary or '(none)'}\n\n"
+        f"New messages to fold in:\n{chr(10).join(lines)}\n\n"
+        "Produce an updated summary (max ~200 words) that preserves: the user's "
+        "goals and preferences, tasks requested, decisions made, key facts or data "
+        "found, files/pages created, and any unresolved or ongoing work. "
+        "Respond with the summary text only, no preamble."
+    )
+    try:
+        from langchain_core.messages import HumanMessage
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        summary = str(response.content).strip()
+    except Exception as e:
+        print(f"[MEMORY SUMMARIZE ERROR]: {e}")
+        return
+    if not summary:
+        return
+    mgr.set_memory_summary(summary)
+    mgr.prune_history_to_window(window)
 
 # ── FILE HELPERS ────────────────────────────────
 
@@ -684,7 +798,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
             tot_agent = create_tot_agent(llm, tools, session_project_dir=session_project_dir, on_event=tot_event, resolve_hitl=resolve_hitl)
             tot_state = {
-                "messages": mgr.get_chat_history(),
+                "messages": mgr.get_llm_messages(),
                 "question": user_message,
                 "branches": [],
                 "selected_plan": "",
@@ -693,6 +807,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 "final_answer": "",
                 "errors": [],
                 "feedback_score": 0,
+                "feedback_reasoning": "",
                 "replan_count": 0,
             }
             result = await tot_agent.ainvoke(tot_state)
@@ -700,6 +815,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             response = {"messages": [AIMessage(content=final_text)], "text": final_text, "tool_calls": []}
 
             mgr.update_chat_history({"role": "assistant", "content": final_text, "tool_calls": []})
+            await roll_conversation_memory(llm, mgr)
             mgr.flush()
             if not safe_ws.is_closed:
                 await safe_ws.send({
@@ -731,7 +847,7 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
         callback_handler = StreamingCallbackHandler(safe_ws, mgr)
         config = {"recursion_limit": 1000, "configurable": {"thread_id": thread_id}, "callbacks": [callback_handler]}
 
-        input_messages = {"messages": mgr.get_chat_history()}
+        input_messages = {"messages": mgr.get_llm_messages()}
         response = None
 
         try:
@@ -776,6 +892,9 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             "content": final_response['text'],
             "tool_calls": final_response['tool_calls']
         })
+
+        await roll_conversation_memory(llm, mgr)
+        mgr.flush()
 
         if not safe_ws.is_closed:
             await safe_ws.send({

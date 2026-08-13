@@ -6,6 +6,7 @@ const { spawn } = require("child_process");
 let mainWindow;
 let backendProcess;
 let splash;
+let activeWebContents = null;
 
 function createSplash() {
   splash = new BrowserWindow({
@@ -55,6 +56,14 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, "../src/index.html"));
+
+  mainWindow.webContents.on("did-attach-webview", (event, webContents) => {
+    activeWebContents = webContents;
+    hookWebRequestSession(webContents.session);
+    webContents.on("destroyed", () => {
+      if (activeWebContents === webContents) activeWebContents = null;
+    });
+  });
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
@@ -222,6 +231,98 @@ ipcMain.handle("delete-entry", async (event, basePath, relPath) => {
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
+  }
+});
+
+// ── BROWSER CAPTURE & JS EXEC IPC ───────────────
+
+const networkLogEntries = [];
+const NETWORK_LOG_MAX = 300;
+const pendingNetworkPayloads = new Map();
+
+function getHeader(headers, name) {
+  if (!headers) return null;
+  const lower = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lower) return headers[key];
+  }
+  return null;
+}
+
+function sanitizeJsResult(value) {
+  try {
+    const seen = new WeakSet();
+    const out = JSON.stringify(value, (k, v) => {
+      if (typeof v === "function") return "[function]";
+      if (typeof v === "symbol") return "[symbol]";
+      if (v && typeof v === "object") {
+        if (v.nodeType) return "[dom]";
+        if (seen.has(v)) return "[circular]";
+        seen.add(v);
+      }
+      return v;
+    });
+    return out === undefined ? String(value) : out;
+  } catch {
+    return String(value);
+  }
+}
+
+function hookWebRequestSession(session) {
+  if (!session || session.__networkCaptureHooked) return;
+  session.__networkCaptureHooked = true;
+
+  session.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
+    let payload = null;
+    if (details.uploadData && details.uploadData.length) {
+      payload = details.uploadData
+        .map((u) => {
+          if (u.bytes) return Buffer.from(u.bytes).toString("utf8");
+          if (u.file) return `[file upload: ${u.file}]`;
+          return "";
+        })
+        .join("\n")
+        .slice(0, 20000);
+    }
+    pendingNetworkPayloads.set(details.id, payload);
+    callback({});
+  });
+
+  session.webRequest.onCompleted({ urls: ["*://*/*"] }, (details) => {
+    const payload = pendingNetworkPayloads.get(details.id);
+    pendingNetworkPayloads.delete(details.id);
+    const contentLength = parseInt(getHeader(details.responseHeaders, "content-length") || "0", 10) || 0;
+    networkLogEntries.push({
+      url: details.url,
+      method: details.method,
+      resourceType: details.resourceType || null,
+      status: details.statusCode,
+      contentType: getHeader(details.responseHeaders, "content-type") || null,
+      size: contentLength,
+      payload: payload || undefined,
+      timestamp: new Date(details.timestamp || Date.now()).toISOString(),
+    });
+    while (networkLogEntries.length > NETWORK_LOG_MAX) networkLogEntries.shift();
+  });
+}
+
+ipcMain.handle("network-log", async (event, action) => {
+  if (action === "clear") {
+    networkLogEntries.length = 0;
+    pendingNetworkPayloads.clear();
+    return { success: true };
+  }
+  return { success: true, entries: networkLogEntries.map((e) => ({ ...e })) };
+});
+
+ipcMain.handle("run-js", async (event, code) => {
+  const wc = activeWebContents;
+  if (!wc || wc.isDestroyed()) return { error: "No active browser page" };
+  try {
+    const result = await wc.executeJavaScript(code, true);
+    return { ok: true, result: sanitizeJsResult(result) };
+  } catch (e) {
+    return { error: e.message };
   }
 });
 

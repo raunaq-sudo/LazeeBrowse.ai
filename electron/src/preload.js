@@ -13,4 +13,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   selectFiles: (defaultPath) => ipcRenderer.invoke("select-files", defaultPath),
   scanDirectory: (dirPath) => ipcRenderer.invoke("scan-directory", dirPath),
   deleteEntry: (basePath, relPath) => ipcRenderer.invoke("delete-entry", basePath, relPath),
+
+  // Browser page (webview guest webContents)
+  runJs: (code) => ipcRenderer.invoke("run-js", code),
+  getNetworkLog: () => ipcRenderer.invoke("network-log", "get"),
 });

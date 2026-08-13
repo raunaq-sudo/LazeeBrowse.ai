@@ -51,7 +51,7 @@ class ToTState(TypedDict):
     is_user_input_required: bool
     verified_datapoints: str
     inconsistencies_found: bool
-    saved_final_path: str
+    feedback_reasoning: str
     user_action: str  # "retry" | "recreate" | "context" | "stop"
 
 
@@ -148,8 +148,10 @@ def create_tot_agent(llm, tools: List[BaseTool], session_project_dir: str = "", 
         await _log("tot_phase", "Expanding user prompt for deeper planning...")
         history_text = ""
         for m in state.get("messages", [])[-8:]:
-            role = getattr(m, "type", "unknown")
-            content = str(getattr(m, "content", "")).strip()[:400]
+            role = getattr(m, "type", None) or (m.get("role") if isinstance(m, dict) else None) or "unknown"
+            if role == "system":
+                continue
+            content = str(getattr(m, "content", "") or "").strip()[:400]
             if content:
                 history_text += f"[{role}] {content}\n"
         prompt = f"""You are a deep-thinking planner. Expand the user's prompt into a detailed, self-contained task description that captures the full intent before any strategy is formulated.
@@ -185,6 +187,15 @@ Respond with ONLY JSON: {{"expanded_prompt": "The expanded task description"}}""
     async def generate_plans(state: ToTState) -> dict:
         is_replan = state.get("replan_count", 0) > 0
         task_prompt = state.get("expanded_question") or state["question"]
+        feedback = (state.get("feedback_reasoning") or "").strip()
+        feedback_section = ""
+        if feedback:
+            feedback_section = (
+                "\n\nFeedback from the evaluation of the previous attempt:\n"
+                f"{feedback}\n"
+                "Incorporate this feedback when designing the strategies so the new "
+                "approaches directly address the identified weaknesses.\n"
+            )
         if is_replan:
             await _log("tot_phase", "Replanning based on failed strategies...")
             failed = [b for b in state["branches"] if b.get("status") == "failed"]
@@ -198,7 +209,7 @@ User task: {task_prompt}
 
 Failed strategies with their rationale:
 {lessons}
-
+{feedback_section}
 Learn from these failures. Generate 2 new, fundamentally different approaches that avoid the same pitfalls.
 
 Format your response as valid JSON:
@@ -216,7 +227,7 @@ Format your response as valid JSON:
             plan_prompt = f"""You are a strategic planner. Given a user task, generate 2-3 distinct approaches to solve it.
 
 User task: {task_prompt}
-
+{feedback_section}
 For each approach, provide:
 1. A concise name/description of the approach
 2. A step-by-step plan (3-6 steps)
@@ -251,7 +262,7 @@ Generate diverse, genuinely different approaches. Consider different angles, too
         await _log("tot_branches", json.dumps(names))
         tag = "Replanned" if is_replan else "Identified"
         await _log("tot_progress", f"{tag} {len(branches)} strategies: {' | '.join(names)}")
-        return {"branches": state["branches"] + branches}
+        return {"branches": state["branches"] + branches, "feedback_reasoning": ""}
 
     async def evaluate_plans(state: ToTState) -> dict:
         branches = state["branches"]
@@ -318,8 +329,17 @@ Use the original index from the list above."""
         idx = state.get("current_idx", -1)
         plan_name = state.get("selected_plan", "unknown")
         await _log("tot_phase", f"Executing: {plan_name}")
+        feedback = (state.get("feedback_reasoning") or "").strip()
+        feedback_note = ""
+        if feedback:
+            feedback_note = (
+                f"\n\n### Feedback from the previous attempt's evaluation\n"
+                f"{feedback}\n\n"
+                "Keep this feedback in mind while executing this next strategy so the "
+                "previous weaknesses are addressed.\n"
+            )
         full_prompt = base_prompt + "\n\n" + f"""## Selected Strategy: {state['selected_plan']}
-
+{feedback_note}
 ### Execution Plan:
 {chr(10).join(f'{i+1}. {s}' for i, s in enumerate(state['selected_steps']))}
 
@@ -365,7 +385,7 @@ Write the complete report as your final answer — do not summarize away the sec
             await _log("tot_progress", f"Strategy produced result: {plan_name}")
             summary = HumanMessage(content=f"[Strategy: {plan_name}] Result:\n{final or 'Task completed.'}")
             await _log("tot_message", summary.content)
-            return {"final_answer": final or "Task completed.", "branches": branches, "messages": state["messages"] + [summary]}
+            return {"final_answer": final or "Task completed.", "branches": branches, "messages": state["messages"] + [summary], "feedback_reasoning": ""}
         except Exception as e:
             err = str(e)[:300]
             if 0 <= idx < len(branches):
@@ -374,7 +394,7 @@ Write the complete report as your final answer — do not summarize away the sec
             await _log("tot_progress", f"Strategy failed: {plan_name}")
             summary = HumanMessage(content=f"[Strategy: {plan_name}] Failed with error: {err}")
             await _log("tot_message", summary.content)
-            return {"errors": state.get("errors", []) + [err], "branches": branches, "messages": state["messages"] + [summary]}
+            return {"errors": state.get("errors", []) + [err], "branches": branches, "messages": state["messages"] + [summary], "feedback_reasoning": ""}
 
     async def check_datapoints(state: ToTState) -> dict:
         final_answer = state.get("final_answer", "")
@@ -516,62 +536,32 @@ Reply with ONLY JSON: {{"has_datapoints": true/false, "is_user_input_required": 
         if not final_answer:
             return {"branches": branches}
 
-        # Save the final response to disk if not already saved
-        update = {}
-        saved_path = state.get("saved_final_path", "")
-        already_saved = False
-        if saved_path and os.path.isfile(saved_path):
-            try:
-                with open(saved_path, "r", encoding="utf-8") as f:
-                    already_saved = f.read() == final_answer
-            except Exception:
-                already_saved = False
-        if not already_saved:
-            # Save the case study/report under a folder named after the user's prompt.
-            report_dir = os.path.join(session_project_dir, "files")
-            safe_name = re.sub(r'[^\w\-]+', '_', state.get("question", "report")).strip('_')[:40] or "report"
-            report_dir = os.path.join(report_dir, safe_name)
-            os.makedirs(report_dir, exist_ok=True)
-            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"case_study_{timestamp}.md"
-            saved_path = os.path.join(report_dir, filename)
-            report_text = (
-                f"# Case Study: {state['question']}\n\n"
-                f"- **Task**: {state['question']}\n"
-                f"- **Plan used**: {state.get('selected_plan', '')}\n"
-                f"- **Date**: {datetime.datetime.now().isoformat(timespec='seconds')}\n\n"
-                f"## Steps\n"
-                f"{chr(10).join(f'{i+1}. {s}' for i, s in enumerate(state.get('selected_steps', [])))}\n\n"
-                f"## Report\n"
-                f"{final_answer}"
-            )
-            with open(saved_path, "w", encoding="utf-8") as f:
-                f.write(report_text)
-            update["saved_final_path"] = saved_path
-            await _log("tot_progress", f"Case study saved: {saved_path}")
-
         await _log("tot_phase", "Evaluating result quality...")
         eval_prompt = f"""Evaluate the quality of this result for the user's task.
 
-User task: {state['question']}
+            User task: {state['question']}
 
-Result:
-{final_answer[:1000]}
+            Result:
+            {final_answer[:1000]}
 
-Score the result 1-10 based on: completeness, accuracy, and usefulness.
-Only score above 7 if the result fully and correctly addresses the task.
-Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
+            Score the result 1-10 based on: completeness, accuracy, and usefulness.
+            Only score above 7 if the result fully and correctly addresses the task.
+            Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
         msg = HumanMessage(content=eval_prompt)
         try:
             response = await llm.ainvoke([msg])
             content = _strip_json(response.content)
             data = json.loads(content)
             score = int(data.get("score", 0))
+            reasoning = str(data.get("reasoning", "")).strip()
         except Exception:
             score = 0
+            reasoning = ""
         score = max(0, min(10, score))
         await _log("tot_progress", f"Result quality score: {score}/10")
-        return {"feedback_score": score, "branches": branches, **update}
+        if reasoning:
+            await _log("tot_progress", f"Reasoning: {reasoning}")
+        return {"feedback_score": score, "feedback_reasoning": reasoning, "branches": branches}
 
     def route_after_feedback(state: ToTState) -> str:
         final_answer = state.get("final_answer", "")
@@ -589,7 +579,11 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
         return "ask_user_action"
 
     async def ask_user_action(state: ToTState) -> dict:
-        await _log("tot_phase", "Result scored below 6 — asking user how to proceed...")
+        await _log("tot_phase", "Result scored below 7 — asking user how to proceed...")
+        reasoning = (state.get("feedback_reasoning") or "").strip()
+        description = "The result scored below 7. Choose how to proceed:"
+        if reasoning:
+            description = f"The result scored below 7 ({reasoning}). Choose how to proceed:"
         options = [
             "1. Retry with an other strategy",
             "2. Recreate strategy from scratch",
@@ -601,7 +595,7 @@ Respond in JSON: {{"score": 8, "reasoning": "Brief reasoning"}}"""
             decision = await resolve_hitl(
                 "get_user_input_from_options",
                 {"options": options},
-                "The result scored below 6. Choose how to proceed:",
+                description,
             )
             message = (decision.get("message") or "").strip()
             if message.startswith("1"):
