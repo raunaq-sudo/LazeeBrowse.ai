@@ -1,7 +1,7 @@
 {
-  "name": "webrunner",
+  "name": "lazeebrowse",
   "version": "1.0.0",
-  "description": "WebRunner - Autonomous browser automation and file system agent.",
+  "description": "LazeeBrowse.ai - Autonomous browser automation and file system agent.",
   "main": "src/main.js",
   "author": "Raunaq",
   "license": "MIT",
@@ -20,8 +20,8 @@
     "electron-builder": "^26.8.1"
   },
   "build": { 
-    "appId": "com.webrunner.app",
-    "productName": "WebRunner",
+    "appId": "ai.lazeebrowse.app",
+    "productName": "LazeeBrowse.ai",
     "directories": {
       "output": "release"
     },

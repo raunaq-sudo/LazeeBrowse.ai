@@ -24,7 +24,7 @@ llm = None
 llm_deterministic = None
 project_dir = db.get_setting("project_dir") or None
 
-app = FastAPI(title="AI Browser Server")
+app = FastAPI(title="LazeeBrowse.ai Server")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1076,7 +1076,7 @@ async def agent_session(websocket: WebSocket, session_id: str):
 
 @app.get("/")
 async def root():
-    return {"status": "AI Browser Server", "version": "1.0.0"}
+    return {"status": "LazeeBrowse.ai Server", "version": "1.0.0"}
 
 @app.get("/health")
 async def health():

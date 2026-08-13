@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────
-//  AI Browser — WebSocket Client
+//  LazeeBrowse.ai — WebSocket Client
 // ─────────────────────────────────────────
 
 let ws = null;
