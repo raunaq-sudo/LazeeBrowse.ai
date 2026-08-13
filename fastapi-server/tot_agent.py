@@ -542,7 +542,7 @@ Reply with ONLY JSON: {{"has_datapoints": true/false, "is_user_input_required": 
             User task: {state['question']}
 
             Result:
-            {final_answer[:1000]}
+            {final_answer}
 
             Score the result 1-10 based on: completeness, accuracy, and usefulness.
             Only score above 7 if the result fully and correctly addresses the task.
