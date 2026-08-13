@@ -14,3 +14,4 @@ fastapi-server/__pycache__
 
 *.db
 fastapi-server/data
+/data/
