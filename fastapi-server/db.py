@@ -45,14 +45,20 @@ def get_all_settings() -> dict:
         "api_keys": get_api_keys(),
         "model_name": get_setting("model_name") or "",
         "project_dir": get_setting("project_dir") or "",
+        "telegram_mode": get_setting("telegram_mode") or "",
+        "telegram_bot_token": get_setting("telegram_bot_token") or "",
     }
 
 
-def save_all_settings(model_name: str = None, project_dir: str = None, api_keys: dict = None):
+def save_all_settings(model_name: str = None, project_dir: str = None, api_keys: dict = None, telegram_mode: str = None, telegram_bot_token: str = None):
     if model_name is not None:
         set_setting("model_name", model_name)
     if project_dir is not None:
         set_setting("project_dir", project_dir)
+    if telegram_mode is not None:
+        set_setting("telegram_mode", "on" if telegram_mode else "")
+    if telegram_bot_token is not None:
+        set_setting("telegram_bot_token", telegram_bot_token)
     if api_keys:
         for provider, key in api_keys.items():
             if provider in PROVIDERS and key:
