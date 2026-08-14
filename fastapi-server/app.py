@@ -50,8 +50,6 @@ async def save_settings(request: Request):
         model_name=body.get("model_name"),
         project_dir=body.get("project_dir"),
         api_keys=api_keys or None,
-        telegram_mode=body.get("telegram_mode"),
-        telegram_bot_token=body.get("telegram_bot_token"),
     )
     return {"ok": True}
 
