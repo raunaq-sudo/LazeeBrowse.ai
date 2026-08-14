@@ -1,17 +1,54 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+*.spec.bak
+.pytest_cache/
+.mypy_cache/
+
+# Electron / Node
 electron/node_modules/
-electron/release
-electron/backend
-fastapi-server/venv/
-fastapi-server/.env
+electron/release/
+electron/dist/
+npm-debug.log*
+yarn-error.log*
 
-fastapi-server/files
-fastapi-server/memory
-fastapi-server/embeddings
-fastapi-server/models
-fastapi-server/dist
-fastapi-server/build
-fastapi-server/__pycache__
+# Environment & secrets
+.env
+.env.*
+!.env.example
 
-*.db
-fastapi-server/data
+# Runtime data
+fastapi-server/files/
+fastapi-server/memory/
+fastapi-server/embeddings/
+fastapi-server/models/
+fastapi-server/data/
+fastapi-server/dist/
+fastapi-server/build/
 /data/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Bundled backend binary (PyInstaller output)
+electron/backend/
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp

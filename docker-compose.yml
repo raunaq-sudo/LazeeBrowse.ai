@@ -1,10 +1,12 @@
 services:
+  # Backend only (headless). Note: runs the FastAPI server without the UI.
   backend:
     build:
       context: ./fastapi-server
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    # Create from the template first: cp fastapi-server/.env.example fastapi-server/.env
     env_file:
       - ./fastapi-server/.env
     environment:
@@ -14,5 +16,25 @@ services:
       - ./data/files:/app/files
       - ./data/browser_strategy:/app/browser_strategy
       - ./data/downloads:/app/downloads
+    shm_size: "2gb"
+    restart: unless-stopped
+
+  # Full desktop app: backend + Electron UI over VNC/noVNC.
+  # Don't run alongside the `backend` service (both would claim host port 8000).
+  desktop:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "6080:6080"   # noVNC web client → http://localhost:6080/vnc.html
+      - "5900:5900"   # raw VNC
+      - "8000:8000"   # FastAPI backend (spawned inside by the Electron app)
+    environment:
+      - DISPLAY=:99
+      - RESOLUTION=1440x900x24
+      - VNC_PORT=5900
+      - NOVNC_PORT=6080
+    volumes:
+      - ./data:/app/fastapi-server/data
     shm_size: "2gb"
     restart: unless-stopped

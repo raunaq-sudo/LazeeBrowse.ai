@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a feature for LazeeBrowse.ai
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What is missing, or what pain point does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How do you imagine this working? Sketch the UI, API, or flow.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Anything you already tried or workarounds you use today.

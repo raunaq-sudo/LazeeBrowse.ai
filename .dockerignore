@@ -1,0 +1,35 @@
+# VCS
+.git
+.gitignore
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+electron/release/
+electron/backend/
+
+# Environment & secrets (never ship real keys into the image)
+fastapi-server/.env
+
+# Runtime data & build artifacts
+fastapi-server/data/
+fastapi-server/dist/
+fastapi-server/build/
+fastapi-server/embeddings/
+fastapi-server/models/
+fastapi-server/files/
+fastapi-server/memory/
+data/
+
+# IDE
+.idea/
+.vscode/
