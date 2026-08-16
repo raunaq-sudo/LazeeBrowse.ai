@@ -6,7 +6,6 @@ let ws = null;
 let sessionId = null;
 let isThinking = false;
 let isConnecting = false;
-let telegramModeOn = false;
 let browserView = null;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
@@ -184,74 +183,8 @@ async function loadSettings() {
       savedProjectDir = data.project_dir;
       updateProjectDisplay(data.project_dir);
     }
-    const tg = document.getElementById("telegramToggle");
-    if (tg) {
-      tg.checked = data.telegram_mode === "on";
-      updateTelegramTokenVisibility();
-      applyTelegramChatDisable();
-    }
-    const tgToken = document.getElementById("telegramToken");
-    if (tgToken && data.telegram_bot_token) {
-      tgToken.value = data.telegram_bot_token;
-      localStorage.setItem("telegram_bot_token", data.telegram_bot_token);
-    }
   } catch (e) {
     console.log("Could not load saved settings:", e.message);
-  }
-}
-
-function updateTelegramTokenVisibility() {
-  const tg = document.getElementById("telegramToggle");
-  const row = document.getElementById("telegramTokenRow");
-  if (!tg || !row) return;
-  row.classList.toggle("hidden", !tg.checked);
-}
-
-function applyTelegramChatDisable() {
-  const tg = document.getElementById("telegramToggle");
-  telegramModeOn = !!(tg && tg.checked);
-  const input = document.getElementById("instructionInput");
-  const attachBtn = document.getElementById("attachBtn");
-  const diveBtn = document.getElementById("deepDiveBtn");
-  const sendBtn = document.getElementById("sendBtn");
-  const urlInput = document.getElementById("urlInput");
-  [input, attachBtn, diveBtn, urlInput].forEach((el) => {
-    if (el) el.disabled = telegramModeOn;
-  });
-  if (sendBtn && !isThinking) {
-    sendBtn.disabled = telegramModeOn;
-  }
-}
-
-async function saveTelegramSettings() {
-  try {
-    const base = getRestBase();
-    const tg = document.getElementById("telegramToggle");
-    const tgToken = document.getElementById("telegramToken");
-    const mode = tg ? tg.checked : false;
-    const token = tgToken ? tgToken.value.trim() : "";
-    if (token) localStorage.setItem("telegram_bot_token", token);
-    await fetch(`${base}/api/settings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ telegram_mode: mode, telegram_bot_token: token }),
-    });
-  } catch (e) {
-    console.log("Could not save telegram settings:", e.message);
-  }
-}
-
-function initTelegramToggle() {
-  const tg = document.getElementById("telegramToggle");
-  if (!tg) return;
-  const tgToken = document.getElementById("telegramToken");
-  tg.addEventListener("change", () => {
-    updateTelegramTokenVisibility();
-    applyTelegramChatDisable();
-    saveTelegramSettings();
-  });
-  if (tgToken) {
-    tgToken.addEventListener("change", () => saveTelegramSettings());
   }
 }
 
@@ -263,8 +196,6 @@ async function saveSettings(model_name, project_dir) {
       const k = localStorage.getItem(`api_key_${p}`) || "";
       if (k) api_keys[p] = k;
     }
-    const tg = document.getElementById("telegramToggle");
-    const tgToken = document.getElementById("telegramToken");
     await fetch(`${base}/api/settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -272,8 +203,6 @@ async function saveSettings(model_name, project_dir) {
         api_keys,
         model_name,
         project_dir,
-        telegram_mode: tg ? tg.checked : false,
-        telegram_bot_token: tgToken ? tgToken.value.trim() : "",
       }),
     });
   } catch (e) {
@@ -282,7 +211,6 @@ async function saveSettings(model_name, project_dir) {
 }
 
 loadModels().then(() => loadSettings());
-initTelegramToggle();
 migrateRecentProjects().then(() => renderRecentProjects());
 
 // ── WEBVIEW SETUP ───────────────────────────────
@@ -1014,7 +942,6 @@ function setThinking(thinking) {
   } else {
     sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     sendBtn.onclick = sendInstruction;
-    sendBtn.disabled = telegramModeOn;
     sendBtn.classList.remove("stop-btn");
   }
 }
@@ -1023,8 +950,6 @@ function stopAgent() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: "stop" }));
   setThinking(false);
-  const input = document.getElementById("instructionInput");
-  input.disabled = telegramModeOn;
 }
 
 function updateBadge(state, text) {
