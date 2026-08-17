@@ -339,6 +339,8 @@ html, body {
 }
 .attached-file-chip .chip-remove:hover { color: var(--danger); }
 
+.attached-image-chip { border-color: rgba(74,124,89,0.4); }
+
 /* BROWSER VIEW — fills remaining space */
 .browser-view {
   flex: 1;
@@ -409,6 +411,28 @@ html, body {
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .log-toggle { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; }
+.log-body {
+  display: flex; flex: 1; min-height: 0; overflow: hidden;
+}
+.log-section {
+  flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+}
+.log-section-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 2px 12px; font-size: 10px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-muted); background: var(--bg-base);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.log-divider {
+  width: 1px; flex-shrink: 0; background: var(--border);
+}
+.console-clear-btn {
+  background: none; border: none; color: var(--text-muted);
+  font-size: 9px; cursor: pointer; text-transform: uppercase;
+  letter-spacing: 0.03em; padding: 0;
+}
+.console-clear-btn:hover { color: var(--text-primary); }
 .log-content {
   padding: 4px 12px; overflow-y: auto; flex: 1; min-height: 0;
   font-family: 'SF Mono', Monaco, monospace; font-size: 11px;
@@ -439,6 +463,28 @@ html, body {
 }
 .copy-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 .copy-btn.copied { color: var(--success); border-color: var(--success); }
+
+/* CONSOLE ENTRIES */
+.console-entry {
+  padding: 6px 0 4px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.console-entry:last-child { border-bottom: none; }
+.console-header {
+  font-size: 10px; font-weight: 600; color: var(--accent);
+  margin-bottom: 4px;
+}
+.console-code {
+  background: var(--bg-base); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 10px;
+  margin: 4px 0; overflow-x: auto; white-space: pre-wrap;
+  word-break: break-all; font-size: 11px; line-height: 1.4;
+  color: var(--text-primary);
+}
+.console-result {
+  font-size: 11px; line-height: 1.4; white-space: pre-wrap;
+  word-break: break-word; color: var(--text-secondary);
+}
 
 /* CONNECT OVERLAY — starts below the titlebar so browser nav controls stay clickable */
 .connect-overlay {

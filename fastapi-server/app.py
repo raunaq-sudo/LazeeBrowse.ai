@@ -15,6 +15,7 @@ from langgraph.types import Command
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AIMessage
 from browser_tools_electron import build_tools, extract_text_from_file
+from uitars_tool import build_uitars_tool
 from config import get_models, get_model_list
 from prompts.deep_agent_browser import prompt
 from tot_agent import create_tot_agent
@@ -97,6 +98,7 @@ connection_tasks: Dict[str, Set[asyncio.Task]] = {}
 session_modes: Dict[str, str] = {}  # session_id -> "browser_control" | "chat"
 session_project_dirs: Dict[str, str] = {}  # session_id -> project_dir
 user_input_futures: Dict[str, asyncio.Future] = {}  # session_id -> Future for interrupt resume
+_session_images: Dict[str, list] = {}  # session_id -> list of base64 image strings
 
 class ChatManager:
     """
@@ -654,7 +656,7 @@ class StreamingCallbackHandler(BaseCallbackHandler):
     async def on_tool_end(self, output: str, **kwargs):
         pass
 
-async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket, attached_files: list = None, deep_dive: bool = False):
+async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket, attached_files: list = None, attached_images: list = None, deep_dive: bool = False):
     try:
         if safe_ws.is_closed:
             return
@@ -690,6 +692,20 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                         file_sections.append(f"--- FILE: {fname} ---\n[Error reading: {e}]\n--- END FILE ---")
             if file_sections:
                 user_message = user_message + "\n\n--- ATTACHED FILES ---\n" + "\n".join(file_sections) + "\n--- END ATTACHED FILES ---"
+
+        if attached_images:
+            img_section = "\n\n--- ATTACHED IMAGES ---\n"
+            for idx, img in enumerate(attached_images):
+                img_name = img.get("name", f"image_{idx}")
+                img_b64 = img.get("base64", "")
+                if img_b64:
+                    img_section += f"[Image {idx + 1}: {img_name}] — call uitars_describe to analyze this image.\n"
+            img_section += "--- END ATTACHED IMAGES ---"
+            user_message = user_message + img_section
+
+        # Store images for tool access (keyed by session)
+        if attached_images:
+            _session_images[session_id] = [img.get("base64", "") for img in attached_images if img.get("base64")]
 
         user_message_obj = {"role": "user", "content": user_message}
         mgr.update_chat_history(user_message_obj)
@@ -740,6 +756,16 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             log_chat=log_wrapper,
             base_path=session_project_dir,
         )
+
+        try:
+            uitars_tool = build_uitars_tool(
+                browser_command=browser_command_wrapper,
+                log_chat=log_wrapper,
+                get_attached_images=lambda: _session_images.get(session_id, []),
+            )
+            tools.append(uitars_tool)
+        except Exception:
+            pass  # LFM2.5-VL not available (missing mlx-vlm or model)
 
         if llm is None:
             await safe_ws.send({"type": "error", "content": "LLM not configured. Please check your API key and model settings.", "timestamp": datetime.now().isoformat()})
@@ -957,8 +983,9 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     if not content:
                         continue
                     attached = data.get("attached_files", [])
+                    attached_images = data.get("attached_images", [])
                     deep_dive = data.get("deep_dive", False)
-                    task = asyncio.create_task(generate_agent_response(session_id, content, safe_ws, attached_files=attached, deep_dive=deep_dive))
+                    task = asyncio.create_task(generate_agent_response(session_id, content, safe_ws, attached_files=attached, attached_images=attached_images, deep_dive=deep_dive))
                     connection_tasks[session_id].add(task)
                     task.add_done_callback(connection_tasks[session_id].discard)
 

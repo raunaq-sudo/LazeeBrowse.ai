@@ -492,10 +492,24 @@ async function handleBrowserCommand(data) {
     switch (command) {
       case "navigate": {
         const wv = getBrowserView();
-        wv.src = params.url;
+        if (!wv) { result = { error: "Webview not initialized" }; break; }
+        const targetUrl = params.url;
+        // If already on the target URL, resolve immediately
+        if (wv.getURL() === targetUrl) {
+          result = { ok: true, url: wv.getURL() };
+          break;
+        }
+        wv.src = targetUrl;
         await new Promise((resolve) => {
-          wv.addEventListener("did-finish-load", resolve, { once: true });
-          setTimeout(resolve, 15000);
+          const done = () => { cleanup(); resolve(); };
+          const onFail = () => { cleanup(); resolve(); };
+          const cleanup = () => {
+            wv.removeEventListener("did-finish-load", done);
+            wv.removeEventListener("did-fail-load", onFail);
+          };
+          wv.addEventListener("did-finish-load", done, { once: true });
+          wv.addEventListener("did-fail-load", onFail, { once: true });
+          setTimeout(() => { cleanup(); resolve(); }, 15000);
         });
         result = { ok: true, url: wv.getURL() };
         break;
@@ -682,6 +696,7 @@ async function handleBrowserCommand(data) {
         break;
       case "run_js":
         result = await window.electronAPI.runJs(params.code);
+        addConsoleLog(params.code, result);
         break;
       case "get_network_payloads":
         result = await window.electronAPI.getNetworkLog();
@@ -724,13 +739,52 @@ async function handleBrowserCommand(data) {
         getBrowserView().goBack();
         result = { ok: true };
         break;
+
       case "go_forward":
         getBrowserView().goForward();
         result = { ok: true };
         break;
-      case "screenshot":
-        result = { error: "Screenshot not supported in webview mode" };
-        break;
+
+      case "screenshot": {
+          const wv = getBrowserView();
+          if (!wv) { result = { error: "Webview not initialized" }; break; }
+          try {
+            const dimsJson = await wv.executeJavaScript(
+              'JSON.stringify({ innerWidth: window.innerWidth, innerHeight: window.innerHeight })'
+            );
+            const { innerWidth, innerHeight } = JSON.parse(dimsJson);
+
+            // Capture via main process (more reliable than wv.capturePage() directly,
+            // which can crash the GPU process on macOS)
+            const webContentsId = wv.getWebContentsId();
+            const base64 = await window.electronAPI.captureWebview(webContentsId, innerWidth, innerHeight);
+
+            // Save into the project directory
+            const title = (wv.getTitle() || "screenshot").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+            const filename = `${title}_${Date.now()}.png`;
+            const saveRes = await window.electronAPI.saveScreenshotToProject(savedProjectDir, base64, filename);
+
+            result = {
+              ok: true,
+              screenshot: base64,
+              width: innerWidth,
+              height: innerHeight,
+              saved: !!(saveRes && saveRes.success),
+              savedPath: saveRes && saveRes.path ? saveRes.path : null,
+            };
+
+            if (saveRes && saveRes.success) {
+              addLog("Saved screenshot: " + saveRes.path);
+              await loadFileTree(); // refresh sidebar so the new file shows up
+            } else {
+              addLog("Save screenshot failed: " + ((saveRes && saveRes.error) || "unknown error"));
+            }
+          } catch (e) {
+            result = { error: e.message };
+          }
+          break;
+        }
+
       default:
         result = { error: `Unknown command: ${command}` };
     }
@@ -904,15 +958,18 @@ async function sendInstruction() {
   if (!content || !ws || ws.readyState !== WebSocket.OPEN || isThinking) return;
 
   const filesToSend = [...attachedFiles];
+  const imagesToSend = [...attachedImages];
   const label = deepDive ? "🧠" : "";
-  addLog(`${label}You: ${content}${filesToSend.length ? ` [${filesToSend.length} file(s) attached]` : ""}`);
-  ws.send(JSON.stringify({ type: "message", content, attached_files: filesToSend, deep_dive: deepDive }));
+  const imgLabel = imagesToSend.length ? ` [${imagesToSend.length} image(s)]` : "";
+  addLog(`${label}You: ${content}${filesToSend.length ? ` [${filesToSend.length} file(s) attached]` : ""}${imgLabel}`);
+  ws.send(JSON.stringify({ type: "message", content, attached_files: filesToSend, attached_images: imagesToSend, deep_dive: deepDive }));
   resetThinkingTokens();
 
   input.value = "";
   input.style.height = "auto";
   document.getElementById("charCount").textContent = "";
   attachedFiles = [];
+  attachedImages = [];
   renderAttachedFiles();
 }
 
@@ -1174,6 +1231,49 @@ function addLog(message) {
   }
 }
 
+function addConsoleLog(code, result) {
+  const logs = document.getElementById("consoleContent");
+  if (!logs) return;
+
+  const entry = document.createElement("div");
+  entry.className = "console-entry";
+
+  const header = document.createElement("div");
+  header.className = "console-header";
+  header.textContent = `[${new Date().toLocaleTimeString()}] run_js`;
+
+  const codeEl = document.createElement("pre");
+  codeEl.className = "console-code";
+  codeEl.textContent = code;
+
+  const resultEl = document.createElement("div");
+  resultEl.className = "console-result";
+  const resultText = result && result.error
+    ? `Error: ${result.error}`
+    : result && result.result !== undefined ? result.result : JSON.stringify(result);
+  resultEl.textContent = String(resultText).slice(0, 2000);
+
+  entry.appendChild(header);
+  entry.appendChild(codeEl);
+  entry.appendChild(resultEl);
+  logs.appendChild(entry);
+  logs.scrollTop = logs.scrollHeight;
+
+  while (logs.children.length > 100) {
+    logs.removeChild(logs.firstChild);
+  }
+
+  const panel = document.getElementById("logPanel");
+  if (panel && panel.classList.contains("collapsed")) {
+    document.getElementById("logBadge").classList.remove("hidden");
+  }
+}
+
+function clearConsole() {
+  const logs = document.getElementById("consoleContent");
+  if (logs) logs.innerHTML = "";
+}
+
 let thinkingLine = null;
 
 function addThinkingToken(token) {
@@ -1392,13 +1492,16 @@ async function deleteFileFromTree(entry) {
 
 // ── FILE ATTACHMENT ─────────────────────────────
 let attachedFiles = [];
+let attachedImages = []; // { name, base64 }
 
 function renderAttachedFiles() {
   const bar = document.getElementById("attachedFilesBar");
   if (!bar) return;
   bar.innerHTML = "";
-  bar.classList.toggle("has-files", attachedFiles.length > 0);
+  const hasItems = attachedFiles.length > 0 || attachedImages.length > 0;
+  bar.classList.toggle("has-files", hasItems);
 
+  // Render file chips
   attachedFiles.forEach((file, idx) => {
     const chip = document.createElement("div");
     chip.className = "attached-file-chip";
@@ -1413,6 +1516,28 @@ function renderAttachedFiles() {
     removeBtn.textContent = "\u00D7";
     removeBtn.addEventListener("click", () => {
       attachedFiles.splice(idx, 1);
+      renderAttachedFiles();
+    });
+
+    chip.appendChild(nameSpan);
+    chip.appendChild(removeBtn);
+    bar.appendChild(chip);
+  });
+
+  // Render image chips
+  attachedImages.forEach((img, idx) => {
+    const chip = document.createElement("div");
+    chip.className = "attached-file-chip attached-image-chip";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "chip-name";
+    nameSpan.textContent = img.name;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "chip-remove";
+    removeBtn.textContent = "\u00D7";
+    removeBtn.addEventListener("click", () => {
+      attachedImages.splice(idx, 1);
       renderAttachedFiles();
     });
 
@@ -1438,6 +1563,29 @@ async function pickFilesForAttachment() {
     }
   });
   renderAttachedFiles();
+}
+
+function pickImageForAttachment() {
+  document.getElementById("imageFileInput").click();
+}
+
+function handleImageFileSelect(event) {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+
+  Array.from(files).forEach(file => {
+    if (!file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64 = e.target.result.split(",")[1]; // strip data:image/...;base64,
+      attachedImages.push({ name: file.name, base64 });
+      renderAttachedFiles();
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // reset so re-selecting the same file triggers change
+  event.target.value = "";
 }
 
 // ── SIDEBAR TOGGLE ─────────────────────────────

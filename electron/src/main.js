@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, powerSaveBlocker } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog, powerSaveBlocker, webContents } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
@@ -326,6 +326,36 @@ ipcMain.handle("run-js", async (event, code) => {
   }
 });
 
+// ── CAPTURE WEBVIEW SCREENSHOT ──────────────────
+
+ipcMain.handle("capture-webview", async (event, webContentsId, viewportW, viewportH) => {
+  const wc = webContents.fromId(webContentsId);
+  if (!wc || wc.isDestroyed()) return { error: "WebContents not found or destroyed" };
+  try {
+    const rect = { x: 0, y: 0, width: viewportW, height: viewportH };
+    const image = await wc.capturePage(rect);
+    const pngBuffer = image.toPNG();
+    return pngBuffer.toString("base64");
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+// ── SAVE SCREENSHOT TO PROJECT ──────────────────
+
+ipcMain.handle("save-screenshot-to-project", async (event, projectDir, base64Data, filename) => {
+  if (!projectDir) return { success: false, error: "No project directory set" };
+  try {
+    const screenshotsDir = path.join(projectDir, "screenshots");
+    await fs.promises.mkdir(screenshotsDir, { recursive: true });
+    const filePath = path.join(screenshotsDir, filename);
+    await fs.promises.writeFile(filePath, Buffer.from(base64Data, "base64"));
+    return { success: true, path: filePath };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 // ── APP LIFECYCLE ───────────────────────────────
 
 app.whenReady().then(async () => {
@@ -357,3 +387,4 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   if (backendProcess) backendProcess.kill();
 });
+
