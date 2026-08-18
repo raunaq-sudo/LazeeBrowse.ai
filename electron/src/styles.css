@@ -339,7 +339,7 @@ html, body {
 }
 .attached-file-chip .chip-remove:hover { color: var(--danger); }
 
-.attached-image-chip { border-color: rgba(74,124,89,0.4); }
+
 
 /* BROWSER VIEW — fills remaining space */
 .browser-view {

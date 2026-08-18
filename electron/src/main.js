@@ -328,11 +328,13 @@ ipcMain.handle("run-js", async (event, code) => {
 
 // ── CAPTURE WEBVIEW SCREENSHOT ──────────────────
 
-ipcMain.handle("capture-webview", async (event, webContentsId, viewportW, viewportH) => {
+ipcMain.handle("capture-webview", async (event, webContentsId, viewportW, viewportH, fullPage) => {
   const wc = webContents.fromId(webContentsId);
   if (!wc || wc.isDestroyed()) return { error: "WebContents not found or destroyed" };
   try {
-    const rect = { x: 0, y: 0, width: viewportW, height: viewportH };
+    const rect = fullPage
+      ? { x: 0, y: 0, width: viewportW, height: viewportH }
+      : { x: 0, y: 0, width: viewportW, height: viewportH };
     const image = await wc.capturePage(rect);
     const pngBuffer = image.toPNG();
     return pngBuffer.toString("base64");

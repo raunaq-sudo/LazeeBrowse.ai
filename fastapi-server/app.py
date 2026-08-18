@@ -15,7 +15,6 @@ from langgraph.types import Command
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AIMessage
 from browser_tools_electron import build_tools, extract_text_from_file
-from uitars_tool import build_uitars_tool
 from config import get_models, get_model_list
 from prompts.deep_agent_browser import prompt
 from tot_agent import create_tot_agent
@@ -98,7 +97,6 @@ connection_tasks: Dict[str, Set[asyncio.Task]] = {}
 session_modes: Dict[str, str] = {}  # session_id -> "browser_control" | "chat"
 session_project_dirs: Dict[str, str] = {}  # session_id -> project_dir
 user_input_futures: Dict[str, asyncio.Future] = {}  # session_id -> Future for interrupt resume
-_session_images: Dict[str, list] = {}  # session_id -> list of base64 image strings
 
 class ChatManager:
     """
@@ -639,10 +637,42 @@ class StreamingCallbackHandler(BaseCallbackHandler):
     def __init__(self, safe_ws, mgr: Optional[ChatManager] = None):
         self.safe_ws = safe_ws
         self.mgr = mgr
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
 
     async def on_llm_new_token(self, token: str, **kwargs):
         if token.strip():
             await self.safe_ws.send({"type": "thinking_token", "content": token})
+
+    def _extract_usage(self, usage: dict):
+        if not usage or not isinstance(usage, dict):
+            return
+        self.total_input_tokens += usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0)
+        self.total_output_tokens += usage.get("completion_tokens", 0) or usage.get("output_tokens", 0)
+
+    async def on_llm_end(self, response, **kwargs):
+        llm_output = getattr(response, "llm_output", None) or {}
+        if isinstance(llm_output, dict):
+            self._extract_usage(llm_output.get("token_usage", {}))
+        for msg_list in getattr(response, "generations", []):
+            for gen in msg_list:
+                info = getattr(gen, "generation_info", None) or {}
+                if isinstance(info, dict):
+                    self._extract_usage(info.get("usage", {}))
+
+    async def on_chat_model_end(self, response, **kwargs):
+        """Handle chat model responses — most LangChain agents use ChatModel."""
+        # response is an AIMessage or list of AIMessageChunk
+        messages = response if isinstance(response, list) else [response]
+        for msg in messages:
+            # Newer LangChain: usage_metadata on AIMessage
+            meta = getattr(msg, "usage_metadata", None)
+            if meta and isinstance(meta, dict):
+                self._extract_usage(meta)
+            # Older LangChain: response_metadata.usage
+            resp_meta = getattr(msg, "response_metadata", None) or {}
+            if isinstance(resp_meta, dict):
+                self._extract_usage(resp_meta.get("usage", {}))
 
     async def on_tool_start(self, serialized: dict, input_str: str, **kwargs):
         name = serialized.get("name", "unknown")
@@ -656,7 +686,28 @@ class StreamingCallbackHandler(BaseCallbackHandler):
     async def on_tool_end(self, output: str, **kwargs):
         pass
 
-async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket, attached_files: list = None, attached_images: list = None, deep_dive: bool = False):
+    def get_token_summary(self) -> dict:
+        return {
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "total_tokens": self.total_input_tokens + self.total_output_tokens,
+        }
+
+    def track_messages(self, messages):
+        """Extract token usage from AIMessage objects after agent completes."""
+        for msg in messages:
+            if getattr(msg, "type", "") != "ai":
+                continue
+            # usage_metadata (newer LangChain)
+            meta = getattr(msg, "usage_metadata", None)
+            if meta and isinstance(meta, dict):
+                self._extract_usage(meta)
+            # response_metadata.usage (provider-specific)
+            resp_meta = getattr(msg, "response_metadata", None) or {}
+            if isinstance(resp_meta, dict):
+                self._extract_usage(resp_meta.get("usage", {}))
+
+async def generate_agent_response(session_id: str, user_message: str, safe_ws: SafeWebSocket, attached_files: list = None, deep_dive: bool = False):
     try:
         if safe_ws.is_closed:
             return
@@ -692,20 +743,6 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                         file_sections.append(f"--- FILE: {fname} ---\n[Error reading: {e}]\n--- END FILE ---")
             if file_sections:
                 user_message = user_message + "\n\n--- ATTACHED FILES ---\n" + "\n".join(file_sections) + "\n--- END ATTACHED FILES ---"
-
-        if attached_images:
-            img_section = "\n\n--- ATTACHED IMAGES ---\n"
-            for idx, img in enumerate(attached_images):
-                img_name = img.get("name", f"image_{idx}")
-                img_b64 = img.get("base64", "")
-                if img_b64:
-                    img_section += f"[Image {idx + 1}: {img_name}] — call uitars_describe to analyze this image.\n"
-            img_section += "--- END ATTACHED IMAGES ---"
-            user_message = user_message + img_section
-
-        # Store images for tool access (keyed by session)
-        if attached_images:
-            _session_images[session_id] = [img.get("base64", "") for img in attached_images if img.get("base64")]
 
         user_message_obj = {"role": "user", "content": user_message}
         mgr.update_chat_history(user_message_obj)
@@ -756,16 +793,6 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
             log_chat=log_wrapper,
             base_path=session_project_dir,
         )
-
-        try:
-            uitars_tool = build_uitars_tool(
-                browser_command=browser_command_wrapper,
-                log_chat=log_wrapper,
-                get_attached_images=lambda: _session_images.get(session_id, []),
-            )
-            tools.append(uitars_tool)
-        except Exception:
-            pass  # LFM2.5-VL not available (missing mlx-vlm or model)
 
         if llm is None:
             await safe_ws.send({"type": "error", "content": "LLM not configured. Please check your API key and model settings.", "timestamp": datetime.now().isoformat()})
@@ -838,9 +865,15 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 "feedback_reasoning": "",
                 "replan_count": 0,
             }
-            result = await tot_agent.ainvoke(tot_state)
+            tot_callback = StreamingCallbackHandler(safe_ws, mgr)
+            tot_config = {"recursion_limit": 1000, "callbacks": [tot_callback]}
+            result = await tot_agent.ainvoke(tot_state, config=tot_config)
             final_text = result.get("final_answer", "No answer generated.")
             response = {"messages": [AIMessage(content=final_text)], "text": final_text, "tool_calls": []}
+
+            # Extract token usage from ToT response messages
+            tot_msgs = result.get("messages", []) if isinstance(result, dict) else []
+            tot_callback.track_messages(tot_msgs)
 
             mgr.update_chat_history({"role": "assistant", "content": final_text, "tool_calls": []})
             await roll_conversation_memory(llm, mgr)
@@ -851,6 +884,14 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                     "role": "assistant",
                     "id": str(uuid.uuid4()),
                     "content": final_text,
+                    "timestamp": datetime.now().isoformat(),
+                })
+                token_summary = tot_callback.get_token_summary()
+                await safe_ws.send({
+                    "type": "token_usage",
+                    "input_tokens": token_summary["input_tokens"],
+                    "output_tokens": token_summary["output_tokens"],
+                    "total_tokens": token_summary["total_tokens"],
                     "timestamp": datetime.now().isoformat(),
                 })
             return
@@ -915,6 +956,11 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
 
         final_response = clean_up_response(response)
 
+        # Extract token usage from response messages
+        all_msgs = response.get("messages", []) if isinstance(response, dict) else []
+        callback_handler.track_messages(all_msgs)
+        tok = callback_handler.get_token_summary()
+
         mgr.update_chat_history({
             "role": "assistant",
             "content": final_response['text'],
@@ -930,6 +976,14 @@ async def generate_agent_response(session_id: str, user_message: str, safe_ws: S
                 "role": "assistant",
                 "id": str(uuid.uuid4()),
                 "content": final_response['text'],
+                "timestamp": datetime.now().isoformat(),
+            })
+            token_summary = callback_handler.get_token_summary()
+            await safe_ws.send({
+                "type": "token_usage",
+                "input_tokens": token_summary["input_tokens"],
+                "output_tokens": token_summary["output_tokens"],
+                "total_tokens": token_summary["total_tokens"],
                 "timestamp": datetime.now().isoformat(),
             })
 
@@ -983,9 +1037,8 @@ async def agent_session(websocket: WebSocket, session_id: str):
                     if not content:
                         continue
                     attached = data.get("attached_files", [])
-                    attached_images = data.get("attached_images", [])
                     deep_dive = data.get("deep_dive", False)
-                    task = asyncio.create_task(generate_agent_response(session_id, content, safe_ws, attached_files=attached, attached_images=attached_images, deep_dive=deep_dive))
+                    task = asyncio.create_task(generate_agent_response(session_id, content, safe_ws, attached_files=attached, deep_dive=deep_dive))
                     connection_tasks[session_id].add(task)
                     task.add_done_callback(connection_tasks[session_id].discard)
 

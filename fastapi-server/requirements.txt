@@ -13,5 +13,4 @@ beautifulsoup4>=4.15.0
 pypandoc>=1.17
 rich>=15.0.0
 pypdf>=5.0.0
-Pillow>=10.0.0
-mlx-vlm>=0.1.0
+

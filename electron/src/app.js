@@ -466,6 +466,10 @@ function handleServerMessage(data) {
       handleUserInputRequest(data);
       break;
 
+    case "token_usage":
+      addLog(`Tokens — input: ${data.input_tokens.toLocaleString()} | output: ${data.output_tokens.toLocaleString()} | total: ${data.total_tokens.toLocaleString()}`);
+      break;
+
     case "pong":
       break;
 
@@ -701,6 +705,40 @@ async function handleBrowserCommand(data) {
       case "get_network_payloads":
         result = await window.electronAPI.getNetworkLog();
         break;
+      case "get_search_results":
+        result = await webviewExecute(`
+          (() => {
+            const results = [];
+            // Google
+            document.querySelectorAll('div.g, div[data-sokoban-container]').forEach(el => {
+              const a = el.querySelector('a[href]');
+              const cite = el.querySelector('cite');
+              if (a) results.push({ title: a.innerText.trim().slice(0, 200), url: a.href, snippet: (el.querySelector('[data-sncf], [data-snf], .VwiC3b') || {}).innerText || '' });
+            });
+            if (results.length) return results;
+            // Bing
+            document.querySelectorAll('li.b_algo').forEach(el => {
+              const a = el.querySelector('h2 a');
+              if (a) results.push({ title: a.innerText.trim().slice(0, 200), url: a.href, snippet: (el.querySelector('.b_caption p') || {}).innerText || '' });
+            });
+            if (results.length) return results;
+            // DuckDuckGo
+            document.querySelectorAll('div[data-testid="result"], article[data-testid="result"]').forEach(el => {
+              const a = el.querySelector('a[data-testid="result-title-a"], a[href]');
+              if (a) results.push({ title: a.innerText.trim().slice(0, 200), url: a.href, snippet: (el.querySelector('[data-result="snippet"]') || {}).innerText || '' });
+            });
+            if (results.length) return results;
+            // Generic fallback: any list of links with nearby text
+            document.querySelectorAll('a[href]').forEach(a => {
+              const parent = a.closest('li, article, div[class*="result"]');
+              if (parent && parent.innerText.length > 30) {
+                results.push({ title: a.innerText.trim().slice(0, 200), url: a.href, snippet: parent.innerText.trim().slice(0, 300) });
+              }
+            });
+            return results.slice(0, 20);
+          })()
+        `);
+        break;
       case "submit_form":
         result = await webviewExecute(`
           (() => {
@@ -749,15 +787,26 @@ async function handleBrowserCommand(data) {
           const wv = getBrowserView();
           if (!wv) { result = { error: "Webview not initialized" }; break; }
           try {
-            const dimsJson = await wv.executeJavaScript(
-              'JSON.stringify({ innerWidth: window.innerWidth, innerHeight: window.innerHeight })'
-            );
-            const { innerWidth, innerHeight } = JSON.parse(dimsJson);
+            const fullPage = !!params.full_page;
+            let captureW, captureH;
+            if (fullPage) {
+              const dimsJson = await wv.executeJavaScript(
+                'JSON.stringify({ scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight })'
+              );
+              const dims = JSON.parse(dimsJson);
+              captureW = dims.scrollWidth;
+              captureH = dims.scrollHeight;
+            } else {
+              const dimsJson = await wv.executeJavaScript(
+                'JSON.stringify({ innerWidth: window.innerWidth, innerHeight: window.innerHeight })'
+              );
+              const dims = JSON.parse(dimsJson);
+              captureW = dims.innerWidth;
+              captureH = dims.innerHeight;
+            }
 
-            // Capture via main process (more reliable than wv.capturePage() directly,
-            // which can crash the GPU process on macOS)
             const webContentsId = wv.getWebContentsId();
-            const base64 = await window.electronAPI.captureWebview(webContentsId, innerWidth, innerHeight);
+            const base64 = await window.electronAPI.captureWebview(webContentsId, captureW, captureH, fullPage);
 
             // Save into the project directory
             const title = (wv.getTitle() || "screenshot").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
@@ -767,8 +816,9 @@ async function handleBrowserCommand(data) {
             result = {
               ok: true,
               screenshot: base64,
-              width: innerWidth,
-              height: innerHeight,
+              width: captureW,
+              height: captureH,
+              full_page: fullPage,
               saved: !!(saveRes && saveRes.success),
               savedPath: saveRes && saveRes.path ? saveRes.path : null,
             };
@@ -958,18 +1008,15 @@ async function sendInstruction() {
   if (!content || !ws || ws.readyState !== WebSocket.OPEN || isThinking) return;
 
   const filesToSend = [...attachedFiles];
-  const imagesToSend = [...attachedImages];
   const label = deepDive ? "🧠" : "";
-  const imgLabel = imagesToSend.length ? ` [${imagesToSend.length} image(s)]` : "";
-  addLog(`${label}You: ${content}${filesToSend.length ? ` [${filesToSend.length} file(s) attached]` : ""}${imgLabel}`);
-  ws.send(JSON.stringify({ type: "message", content, attached_files: filesToSend, attached_images: imagesToSend, deep_dive: deepDive }));
+  addLog(`${label}You: ${content}${filesToSend.length ? ` [${filesToSend.length} file(s) attached]` : ""}`);
+  ws.send(JSON.stringify({ type: "message", content, attached_files: filesToSend, deep_dive: deepDive }));
   resetThinkingTokens();
 
   input.value = "";
   input.style.height = "auto";
   document.getElementById("charCount").textContent = "";
   attachedFiles = [];
-  attachedImages = [];
   renderAttachedFiles();
 }
 
@@ -1492,13 +1539,12 @@ async function deleteFileFromTree(entry) {
 
 // ── FILE ATTACHMENT ─────────────────────────────
 let attachedFiles = [];
-let attachedImages = []; // { name, base64 }
 
 function renderAttachedFiles() {
   const bar = document.getElementById("attachedFilesBar");
   if (!bar) return;
   bar.innerHTML = "";
-  const hasItems = attachedFiles.length > 0 || attachedImages.length > 0;
+  const hasItems = attachedFiles.length > 0;
   bar.classList.toggle("has-files", hasItems);
 
   // Render file chips
@@ -1524,27 +1570,6 @@ function renderAttachedFiles() {
     bar.appendChild(chip);
   });
 
-  // Render image chips
-  attachedImages.forEach((img, idx) => {
-    const chip = document.createElement("div");
-    chip.className = "attached-file-chip attached-image-chip";
-
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "chip-name";
-    nameSpan.textContent = img.name;
-
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "chip-remove";
-    removeBtn.textContent = "\u00D7";
-    removeBtn.addEventListener("click", () => {
-      attachedImages.splice(idx, 1);
-      renderAttachedFiles();
-    });
-
-    chip.appendChild(nameSpan);
-    chip.appendChild(removeBtn);
-    bar.appendChild(chip);
-  });
 }
 
 async function pickFilesForAttachment() {
@@ -1563,29 +1588,6 @@ async function pickFilesForAttachment() {
     }
   });
   renderAttachedFiles();
-}
-
-function pickImageForAttachment() {
-  document.getElementById("imageFileInput").click();
-}
-
-function handleImageFileSelect(event) {
-  const files = event.target.files;
-  if (!files || files.length === 0) return;
-
-  Array.from(files).forEach(file => {
-    if (!file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target.result.split(",")[1]; // strip data:image/...;base64,
-      attachedImages.push({ name: file.name, base64 });
-      renderAttachedFiles();
-    };
-    reader.readAsDataURL(file);
-  });
-
-  // reset so re-selecting the same file triggers change
-  event.target.value = "";
 }
 
 // ── SIDEBAR TOGGLE ─────────────────────────────

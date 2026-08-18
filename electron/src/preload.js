@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   runJs: (code) => ipcRenderer.invoke("run-js", code),
   getNetworkLog: () => ipcRenderer.invoke("network-log", "get"),
 
-  captureWebview: (id, w, h) => ipcRenderer.invoke('capture-webview', id, w, h),
+  captureWebview: (id, w, h, fullPage) => ipcRenderer.invoke('capture-webview', id, w, h, fullPage),
 saveScreenshotToProject: (projectDir, base64Data, filename) =>
   ipcRenderer.invoke('save-screenshot-to-project', projectDir, base64Data, filename),
 });

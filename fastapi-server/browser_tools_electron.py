@@ -322,9 +322,20 @@ def build_tools(browser_command, log_chat, base_path=None):
 
     @tool
     async def get_page_text() -> str:
-        """Get all visible text from the page."""
+        """Get all visible text from the page. If the page is very large (>6000 tokens), returns a concise brief instead of raw text."""
         await log_chat("Getting page text")
-        return await browser_command("get_text", {})
+        text = await browser_command("get_text", {})
+        if not isinstance(text, str):
+            return str(text)
+
+        # Rough token estimate: ~4 chars per token
+        estimated_tokens = len(text) // 4
+
+        if estimated_tokens <= 6000:
+            return text
+
+        # Heavy page — truncate with a notice
+        return text[:24000] + f"\n\n[Truncated — ~{estimated_tokens} tokens total]"
 
     @tool
     async def get_all_links() -> list:
