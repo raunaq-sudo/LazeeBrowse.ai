@@ -7,6 +7,12 @@ Autonomous browser agent built with **Electron** (frontend) and **FastAPI** (Web
 
 > ⚠️ **Security note:** LazeeBrowse.ai can execute arbitrary JavaScript and commands in your real browser. Only run it on pages and systems you trust, and treat it as a powerful automation tool.
 
+<p align="center">
+  <img src="public/starting_screen.png" alt="LazeeBrowse.ai start screen" width="45%">
+  &nbsp;&nbsp;
+  <img src="public/browser_in_action.png" alt="LazeeBrowse.ai browser in action" width="45%">
+</p>
+
 ## Features
 
 - **Real browser control** — navigate, click, type, scroll, submit forms, press keys via Electron webview.

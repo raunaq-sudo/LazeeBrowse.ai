@@ -108,6 +108,19 @@
   .chip { background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 8px 16px; font-size: 0.88rem; color: var(--muted); }
   .chip b { color: var(--text); font-weight: 600; }
 
+  /* Screenshots */
+  .screenshots-wrap { perspective: 1200px; }
+  .screenshots { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; transform-style: preserve-3d; }
+  .screenshots img {
+    width: 100%; max-width: 520px; border-radius: var(--radius);
+    border: 1px solid var(--border); transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94), border-color 0.2s ease;
+    will-change: transform;
+    transform: translateZ(0);
+  }
+  .screenshots img:nth-child(1) { transform: translateZ(40px) rotateY(-1.5deg); }
+  .screenshots img:nth-child(2) { transform: translateZ(20px) rotateY(1.5deg); }
+  .screenshots img:hover { border-color: var(--accent); transform: translateZ(60px) scale(1.02); }
+
   /* Footer */
   footer { border-top: 1px solid var(--border); padding: 36px 0; color: var(--muted); font-size: 0.9rem; text-align: center; }
   footer a { color: var(--muted); }
@@ -127,6 +140,7 @@
     <ul>
       <li><a href="#features">Features</a></li>
       <li><a href="#how">How it works</a></li>
+      <li><a href="#screenshots">Screenshots</a></li>
       <li><a href="#get-started">Get started</a></li>
       <li><a href="#stack">Stack</a></li>
     </ul>
@@ -226,6 +240,19 @@
   </div>
 </section>
 
+<section id="screenshots">
+  <div class="wrap">
+    <h2 class="section-title">Screenshots</h2>
+    <p class="section-sub">LazeeBrowse.ai in action.</p>
+    <div class="screenshots-wrap">
+      <div class="screenshots">
+        <img src="public/starting_screen.png" alt="LazeeBrowse.ai start screen" loading="lazy">
+        <img src="public/browser_in_action.png" alt="LazeeBrowse.ai browser in action" loading="lazy">
+      </div>
+    </div>
+  </div>
+</section>
+
 <section id="get-started">
   <div class="wrap">
     <h2 class="section-title">Get started</h2>
@@ -276,6 +303,31 @@ npm start</code></pre>
     </p>
   </div>
 </footer>
+
+<script>
+  const imgs = document.querySelectorAll('.screenshots img');
+  let ticking = false;
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const vh = window.innerHeight;
+      imgs.forEach((img, i) => {
+        const rect = img.getBoundingClientRect();
+        if (rect.bottom < 0 || rect.top > vh) return;
+        const progress = (rect.top + rect.height / 2) / vh;
+        const depth = i === 0 ? 30 : 15;
+        const rotY = i === 0 ? -2 : 2;
+        const ty = (progress - 0.5) * depth;
+        const ry = (progress - 0.5) * rotY;
+        img.style.transform = `translateZ(${depth}px) translateY(${ty}px) rotateY(${ry}deg)`;
+      });
+      ticking = false;
+    });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+</script>
 
 </body>
 </html>
