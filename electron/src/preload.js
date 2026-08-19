@@ -21,4 +21,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   captureWebview: (id, w, h, fullPage) => ipcRenderer.invoke('capture-webview', id, w, h, fullPage),
 saveScreenshotToProject: (projectDir, base64Data, filename) =>
   ipcRenderer.invoke('save-screenshot-to-project', projectDir, base64Data, filename),
+
+  // Clear webview session data (cookies, storage, cache)
+  clearBrowserData: () => ipcRenderer.invoke('clear-browser-data'),
 });

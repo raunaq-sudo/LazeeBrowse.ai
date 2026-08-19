@@ -57,13 +57,44 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, "../src/index.html"));
 
-  mainWindow.webContents.on("did-attach-webview", (event, webContents) => {
-    activeWebContents = webContents;
-    hookWebRequestSession(webContents.session);
-    webContents.on("destroyed", () => {
-      if (activeWebContents === webContents) activeWebContents = null;
-    });
+  // mainWindow.webContents.on("did-attach-webview", (event, webContents) => {
+  //   activeWebContents = webContents;
+  //   // Mask as regular Chrome so sites like LinkedIn don't serve mobile/restricted versions
+  //   webContents.setUserAgent(
+  //     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  //   );
+  //   // Inject Sec-CH-UA client hint headers so sites see a real Chrome browser
+  //   webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+  //     // Only apply navigation-style Sec-Fetch-* headers for top-level navigations
+  //     if (details.resourceType === "mainFrame") {
+  //       details.requestHeaders["Sec-Fetch-Dest"] = "document";
+  //       details.requestHeaders["Sec-Fetch-Mode"] = "navigate";
+  //       details.requestHeaders["Sec-Fetch-Site"] = "none";
+  //       details.requestHeaders["Sec-Fetch-User"] = "?1";
+  //       details.requestHeaders["Upgrade-Insecure-Requests"] = "1";
+  //     }
+  //     // Sec-CH-UA hints are resource-type agnostic — always safe to set
+  //     details.requestHeaders["Sec-CH-UA"] = '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"';
+  //     details.requestHeaders["Sec-CH-UA-Mobile"] = "?0";
+  //     details.requestHeaders["Sec-CH-UA-Platform"] = '"macOS"';
+  //     callback({ requestHeaders: details.requestHeaders });
+  //   });
+  //   hookWebRequestSession(webContents.session);
+  //   webContents.on("destroyed", () => {
+  //     if (activeWebContents === webContents) activeWebContents = null;
+  //   });
+  // });
+
+mainWindow.webContents.on("did-attach-webview", (event, webContents) => {
+  activeWebContents = webContents;
+
+  // Keep Electron's native Chromium behavior
+  hookWebRequestSession(webContents.session);
+
+  webContents.on("destroyed", () => {
+    if (activeWebContents === webContents) activeWebContents = null;
   });
+});
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
@@ -358,6 +389,19 @@ ipcMain.handle("save-screenshot-to-project", async (event, projectDir, base64Dat
   }
 });
 
+ipcMain.handle("clear-browser-data", async () => {
+  if (!activeWebContents) return { success: false, error: "No active webview" };
+  try {
+    const session = activeWebContents.session;
+    await session.clearStorageData();
+    await session.clearCache();
+    activeWebContents.reload();
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 // ── APP LIFECYCLE ───────────────────────────────
 
 app.whenReady().then(async () => {
@@ -389,4 +433,3 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   if (backendProcess) backendProcess.kill();
 });
-

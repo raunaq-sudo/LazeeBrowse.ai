@@ -970,6 +970,15 @@ document.getElementById("refreshBtn").addEventListener("click", () => {
   getBrowserView().reload();
 });
 
+document.getElementById("clearDataBtn").addEventListener("click", async () => {
+  const result = await window.electronAPI.clearBrowserData();
+  if (result.success) {
+    addLog("Browser data cleared (cookies, storage, cache)");
+  } else {
+    addLog(`Clear failed: ${result.error}`);
+  }
+});
+
 // ── THEME TOGGLE ────────────────────────────────
 (function initTheme() {
   const saved = localStorage.getItem("ai_browser_theme");
