@@ -65,14 +65,18 @@ function createWindow() {
     );
     // Inject Sec-CH-UA client hint headers so sites see a real Chrome browser
     webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+      // Only apply navigation-style Sec-Fetch-* headers for top-level navigations
+      if (details.resourceType === "mainFrame") {
+        details.requestHeaders["Sec-Fetch-Dest"] = "document";
+        details.requestHeaders["Sec-Fetch-Mode"] = "navigate";
+        details.requestHeaders["Sec-Fetch-Site"] = "none";
+        details.requestHeaders["Sec-Fetch-User"] = "?1";
+        details.requestHeaders["Upgrade-Insecure-Requests"] = "1";
+      }
+      // Sec-CH-UA hints are resource-type agnostic — always safe to set
       details.requestHeaders["Sec-CH-UA"] = '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"';
       details.requestHeaders["Sec-CH-UA-Mobile"] = "?0";
       details.requestHeaders["Sec-CH-UA-Platform"] = '"macOS"';
-      details.requestHeaders["Sec-Fetch-Dest"] = "document";
-      details.requestHeaders["Sec-Fetch-Mode"] = "navigate";
-      details.requestHeaders["Sec-Fetch-Site"] = "none";
-      details.requestHeaders["Sec-Fetch-User"] = "?1";
-      details.requestHeaders["Upgrade-Insecure-Requests"] = "1";
       callback({ requestHeaders: details.requestHeaders });
     });
     hookWebRequestSession(webContents.session);
