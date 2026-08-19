@@ -59,6 +59,22 @@ function createWindow() {
 
   mainWindow.webContents.on("did-attach-webview", (event, webContents) => {
     activeWebContents = webContents;
+    // Mask as regular Chrome so sites like LinkedIn don't serve mobile/restricted versions
+    webContents.setUserAgent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    );
+    // Inject Sec-CH-UA client hint headers so sites see a real Chrome browser
+    webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+      details.requestHeaders["Sec-CH-UA"] = '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"';
+      details.requestHeaders["Sec-CH-UA-Mobile"] = "?0";
+      details.requestHeaders["Sec-CH-UA-Platform"] = '"macOS"';
+      details.requestHeaders["Sec-Fetch-Dest"] = "document";
+      details.requestHeaders["Sec-Fetch-Mode"] = "navigate";
+      details.requestHeaders["Sec-Fetch-Site"] = "none";
+      details.requestHeaders["Sec-Fetch-User"] = "?1";
+      details.requestHeaders["Upgrade-Insecure-Requests"] = "1";
+      callback({ requestHeaders: details.requestHeaders });
+    });
     hookWebRequestSession(webContents.session);
     webContents.on("destroyed", () => {
       if (activeWebContents === webContents) activeWebContents = null;

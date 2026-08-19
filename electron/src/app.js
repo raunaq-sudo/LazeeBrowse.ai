@@ -1603,8 +1603,14 @@ function updateSidebarTogglePosition() {
   const sidebar = document.getElementById("fileSidebar");
   const btn = document.getElementById("sidebarToggle");
   if (!sidebar || !btn) return;
-  const w = sidebar.classList.contains("collapsed") ? 0 : sidebar.getBoundingClientRect().width;
-  btn.style.left = w + "px";
+  const collapsed = sidebar.classList.contains("collapsed");
+  if (collapsed) {
+    btn.style.left = "0px";
+    btn.style.right = "auto";
+  } else {
+    btn.style.left = "auto";
+    btn.style.right = "-22px";
+  }
 }
 
 // ── SIDEBAR RESIZE ─────────────────────────────

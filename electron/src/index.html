@@ -92,22 +92,24 @@
   <!-- MAIN CONTENT: sidebar + browser -->
   <div class="main-content">
     <!-- FILE SIDEBAR -->
-    <div class="file-sidebar" id="fileSidebar">
-      <div class="sidebar-header">
-        <span>Files</span>
-        <button class="sidebar-refresh-btn" id="sidebarRefresh" onclick="refreshFileTree()" title="Refresh file tree">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
+    <div class="sidebar-group">
+      <div class="file-sidebar" id="fileSidebar">
+        <div class="sidebar-header">
+          <span>Files</span>
+          <button class="sidebar-refresh-btn" id="sidebarRefresh" onclick="refreshFileTree()" title="Refresh file tree">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="sidebar-content" id="fileTree"></div>
       </div>
-      <div class="sidebar-content" id="fileTree"></div>
+      <div class="sidebar-resize-handle" id="sidebarResizeHandle"></div>
+      <button class="sidebar-toggle-btn" id="sidebarToggle" onclick="toggleSidebar()" title="Toggle sidebar">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
-    <div class="sidebar-resize-handle" id="sidebarResizeHandle"></div>
-    <button class="sidebar-toggle-btn" id="sidebarToggle" onclick="toggleSidebar()" title="Toggle sidebar">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>
 
     <!-- BROWSER VIEW -->
-    <webview id="browserView" class="browser-view" src="https://www.google.com" autosize="on"></webview>
+    <webview id="browserView" class="browser-view" src="https://www.google.com" autosize="on" partition="persist:lb"></webview>
 
     <!-- SAVE OVERLAY -->
     <div class="save-overlay" id="saveOverlay">

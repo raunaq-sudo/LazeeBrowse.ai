@@ -232,6 +232,9 @@ html, body {
 }
 
 /* FILE SIDEBAR */
+.sidebar-group {
+  display: flex; flex-shrink: 0; position: relative;
+}
 .file-sidebar {
   width: 220px; min-width: 0; flex-shrink: 0;
   display: flex; flex-direction: column;
@@ -287,10 +290,10 @@ html, body {
 .sidebar-resize-handle:hover,
 .sidebar-resize-handle.active { background: var(--accent-dim); }
 
-/* SIDEBAR TOGGLE BUTTON — always visible, sits outside sidebar */
+/* SIDEBAR TOGGLE BUTTON — always visible, sits on sidebar-group edge */
 .sidebar-toggle-btn {
-  position: absolute; left: 0; top: 50%; transform: translateY(-50%);
-  width: 18px; height: 36px; z-index: 20;
+  position: absolute; right: -22px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 36px; z-index: 20;
   display: flex; align-items: center; justify-content: center;
   background: var(--bg-elevated); border: 1px solid var(--border-mid);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -299,7 +302,7 @@ html, body {
 }
 .sidebar-toggle-btn:hover { color: var(--accent); background: var(--accent-dim); }
 .sidebar-toggle-btn svg { transition: transform var(--transition); }
-.sidebar-toggle-btn.collapsed { left: 0; }
+.sidebar-toggle-btn.collapsed { left: 0; right: auto; }
 .sidebar-toggle-btn.collapsed svg { transform: rotate(180deg); }
 
 /* ATTACH BUTTON */
@@ -347,6 +350,7 @@ html, body {
   width: 100%;
   min-height: 0;
   border: none;
+  pointer-events: auto;
 }
 
 /* SAVE OVERLAY (floating on the browser) */
